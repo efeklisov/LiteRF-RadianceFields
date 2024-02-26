@@ -1,0 +1,27 @@
+name: CodeCov
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: Debug
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: code-coverage
+      working-directory: ${{github.workspace}}
+      run: bash coverage.sh
+
+    - name: upload-coverage
+      working-directory: ${{github.workspace}}
+      run: bash <(curl -s https://codecov.io/bash) -f build/coverage/coverage.xml
+      
