@@ -92,10 +92,6 @@ int main(int argc, const char** argv)
     float timings[4] = {0,0,0,0};
     pImpl->GetExecutionTime("RayMarch", timings);
 
-    std::stringstream strOut;
-    strOut << std::fixed << std::setprecision(2) << "out_cpu_" << i << ".bmp";
-    std::string fileName = strOut.str();
-
     std::stringstream inputImgStrStream;
     inputImgStrStream << "../data/radiance_fields/lego/train/r_" << i << ".png";
     std::string inputImgStr = inputImgStrStream.str();
@@ -105,17 +101,21 @@ int main(int argc, const char** argv)
     int CHANNELS = 4;
 
     stbi_uc* input_raw = stbi_load(inputImgStr.c_str(), &WIDTH, &HEIGHT, &CHANNELS, CHANNELS);
-    uint* input = (uint*)input_raw;
+    uint* input = (uint*)input_raw;                                                                         
 
-    // std::cout << L1Loss(input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get()) << std::endl;
+    for (int j = 0; j < 20; j++) {
+      std::stringstream strOut;
+      strOut << std::fixed << std::setprecision(2) << "out_cpu_" << i << "_step_" << j << ".bmp";
+      std::string fileName = strOut.str();
 
-    float loss, loss_d;
-    //L1LossGrad(&loss, &loss_d, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), pImpl_d.get());
-    L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get());
+      float loss, loss_d;
 
-    std::cout << loss << ' ' << loss_d << std::endl;
+      pImpl_d->zeroGrad();
+      L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), pImpl_d.get(), fileName.c_str());
+      pImpl->optimizerStep(pImpl_d.get(), 1.f);
 
-    LiteImage::SaveBMP(fileName.c_str(), pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
+      std::cout << loss << ' ' << loss_d << std::endl;
+    }
 
     // for (int y = 0; y < WIN_HEIGHT; y++)
     //   for(int x = 0; x < WIN_WIDTH; x++)
