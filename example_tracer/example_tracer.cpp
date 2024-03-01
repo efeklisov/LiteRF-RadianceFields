@@ -144,7 +144,7 @@ float3 RayGridIntersection(bool mode, float3 L, float3 ray_pos, float3 ray_dir, 
 }
 
 float RayGridLoss(float3 &ref, float3 &L, float3 &rayPos, float3 &rayDir, double &step, float2 &boxFarNear, BoundingBox &bb, Cell* &grid, size_t &gridSize) {
-  float3 color = RayGridIntersection(false, L, rayPos, rayDir, step, boxFarNear, bb, grid, gridSize);
+  float3 color = RayGridIntersection(true, float3(0.0f), rayPos, rayDir, step, boxFarNear, bb, grid, gridSize);
 
   return std::abs(color[0] - ref[0]) + std::abs(color[1] - ref[1]) + std::abs(color[2] - ref[2]);
 }
