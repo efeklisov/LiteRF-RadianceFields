@@ -84,6 +84,7 @@ int main(int argc, const char** argv)
     viewMat[3][3] = 1.0;
 
     pImpl->SetWorldViewMatrix(transpose(viewMat));
+
     pImpl->SetWorldViewMProjatrix(perspectiveMatrix(120, 1, 1, 8));
 
     pImpl->UpdateMembersPlainData();                                            // copy all POD members from CPU to GPU in GPU implementation
@@ -116,16 +117,6 @@ int main(int argc, const char** argv)
 
       std::cout << loss << ' ' << loss_d << std::endl;
     }
-
-    // for (int y = 0; y < WIN_HEIGHT; y++)
-    //   for(int x = 0; x < WIN_WIDTH; x++)
-    //     std::cout << gen_d[y * WIN_WIDTH + x] << ' ';
-
-    // for (int z = 0; z < gridSize; z++)
-    //   for (int y = 0; y < gridSize; y++)
-    //     for (int x = 0; x < gridSize; x++)
-    //       if (pImpl->grid[z* gridSize * gridSize + y * gridSize + x].density != 0.0f)
-    //         std::cout << pImpl->grid[z* gridSize * gridSize + y * gridSize + x].density << ' ';
 
     i++;
   }

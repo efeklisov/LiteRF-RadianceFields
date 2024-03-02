@@ -76,11 +76,11 @@ public:
         Cell* cell_d = &pImpl_d->grid[z * gridSize * gridSize + y * gridSize + x];
 
         cell->density += cell_d->density * learning_rate;
-        // for (int i = 0; i < 9; i++) {
-        //   cell->sh_r[i] += cell_d->sh_r[i] * learning_rate;
-        //   cell->sh_g[i] += cell_d->sh_g[i] * learning_rate;
-        //   cell->sh_b[i] += cell_d->sh_b[i] * learning_rate;
-        // }
+        for (int i = 0; i < 9; i++) {
+          cell->sh_r[i] += cell_d->sh_r[i] * learning_rate;
+          cell->sh_g[i] += cell_d->sh_g[i] * learning_rate;
+          cell->sh_b[i] += cell_d->sh_b[i] * learning_rate;
+        }
       }
   }
 
@@ -90,7 +90,7 @@ public:
   void SetWorldViewMProjatrix(const float4x4& a_mat) {m_worldViewProjInv = inverse4x4(a_mat);}
 
   void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height, float4* L);
-  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, float4* L, RayMarcherExample* pImpl_d);
+  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, RayMarcherExample* pImpl_d);
   void RayMarch(uint32_t* out_color [[size("width*height")]], uint32_t width, uint32_t height);  
 
   void CommitDeviceData() {}                                       // will be overriden in generated class
