@@ -173,18 +173,18 @@ float3 RayGridIntersection(bool mode, float3 L, float3 ray_pos, float3 ray_dir, 
   return colour;
 }
 
-float RayGridLoss(float ref[3], float rayPos[3], float rayDir[3], double step, float boxFarNear[2], BoundingBox bb, Cell* grid, size_t gridSize) {
+void RayGridLoss(float& L, float ref[3], float rayPos[3], float rayDir[3], double step, float boxFarNear[2], float bbMin[3], float bbMax[3], float* grid, size_t gridSize) {
   float color[3] = {};
   
   float t_min = 1.0;
   float t_max = 8.0;
 
   if (t_min > boxFarNear[1])
-    return std::abs(0.0f - ref[0]) + std::abs(0.0f - ref[1]) + std::abs(0.0f - ref[2]);
+    L = std::abs(0.0f - ref[0]) + std::abs(0.0f - ref[1]) + std::abs(0.0f - ref[2]);
 
   float throughput = 1.0;
 
-  float t = max(t_min, boxFarNear[0]);
+  float t = t_min > boxFarNear[0] ? t_min : boxFarNear[0];
   while ((t < min(t_max, boxFarNear[1])) && (throughput > 0.01)) {
     float p[3] = {};
     p[0] = rayPos[0] + t * rayDir[0];
@@ -192,9 +192,9 @@ float RayGridLoss(float ref[3], float rayPos[3], float rayDir[3], double step, f
     p[2] = rayPos[2] + t * rayDir[2];
 
     float coords01[3] = {};
-    coords01[0] = (p[0] - bb.min[0]) / (bb.max[0] - bb.min[0]);
-    coords01[1] = (p[1] - bb.min[1]) / (bb.max[1] - bb.min[1]);
-    coords01[2] = (p[2] - bb.min[2]) / (bb.max[2] - bb.min[2]);
+    coords01[0] = (p[0] - bbMin[0]) / (bbMax[0] - bbMin[0]);
+    coords01[1] = (p[1] - bbMin[1]) / (bbMax[1] - bbMin[1]);
+    coords01[2] = (p[2] - bbMin[2]) / (bbMax[2] - bbMin[2]);
 
     float coords[3] = {};
     coords[0] = coords01[0] * (float)(gridSize - 1);
@@ -202,60 +202,66 @@ float RayGridLoss(float ref[3], float rayPos[3], float rayDir[3], double step, f
     coords[2] = coords01[2] * (float)(gridSize - 1);
 
     float nearCoords[3] = {};
-    nearCoords[0] = round(coords[0] - rayDir[0] * 0.5);
-    nearCoords[1] = round(coords[1] - rayDir[1] * 0.5);
-    nearCoords[2] = round(coords[2] - rayDir[2] * 0.5);
+    nearCoords[0] = (int)(coords[0] - rayDir[0] * 0.5);
+    nearCoords[1] = (int)(coords[1] - rayDir[1] * 0.5);
+    nearCoords[2] = (int)(coords[2] - rayDir[2] * 0.5);
 
     float farCoords[3] = {};
-    farCoords[0] = round(coords[0] + rayDir[0] * 0.5);
-    farCoords[1] = round(coords[1] + rayDir[1] * 0.5);
-    farCoords[2] = round(coords[2] + rayDir[2] * 0.5);
+    farCoords[0] = (int)(coords[0] + rayDir[0] * 0.5);
+    farCoords[1] = (int)(coords[1] + rayDir[1] * 0.5);
+    farCoords[2] = (int)(coords[2] + rayDir[2] * 0.5);
 
     float lerpFactors[3] = {};
     lerpFactors[0] = coords[0] - nearCoords[0];
     lerpFactors[1] = coords[1] - nearCoords[1];
     lerpFactors[2] = coords[2] - nearCoords[2];
 
-    Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors[0]);
-    Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors[0]);
-    Cell xy01 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], gridSize)], lerpFactors[0]);
-    Cell xy11 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], gridSize)], lerpFactors[0]);
+    float xy00 = lerp(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors[0]);
+    float xy10 = lerp(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors[0]);
+    float xy01 = lerp(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], gridSize)], lerpFactors[0]);
+    float xy11 = lerp(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], gridSize)], lerpFactors[0]);
 
-    Cell xyz0 = lerpCell(xy00, xy10, lerpFactors[1]);
-    Cell xyz1 = lerpCell(xy01, xy11, lerpFactors[1]);
+    float xyz0 = lerp(xy00, xy10, lerpFactors[1]);
+    float xyz1 = lerp(xy01, xy11, lerpFactors[1]);
 
-    Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors[2]);
+    float gridVal = lerp(xyz0, xyz1, lerpFactors[2]);
 
     // relu
-    if (gridVal.density < 0.0)
-      gridVal.density = 0.0;
+    if (gridVal < 0.0)
+      gridVal = 0.0;
 
-    float tr = exp(-gridVal.density * step);
+    float tr = exp(-gridVal * step);
 
-    // float3 RGB = float3(1.0, 1.0, 1.0);
-    float RGB[3] = {1.0f, 1.0f, 1.0f};
-    //RGB[0] = eval_sh(gridVal.sh_r, rayDir);
-    //RGB[1] = eval_sh(gridVal.sh_g, rayDir);
-    //RGB[2] = eval_sh(gridVal.sh_b, rayDir);
+    // // float3 RGB = float3(1.0, 1.0, 1.0);
+    float RGB_0 = 1.0f;
+    float RGB_1 = 1.0f;
+    float RGB_2 = 1.0f;
+    // //RGB[0] = eval_sh(gridVal.sh_r, rayDir);
+    // //RGB[1] = eval_sh(gridVal.sh_g, rayDir);
+    // //RGB[2] = eval_sh(gridVal.sh_b, rayDir);
     
-    color[0] = color[0] + throughput * (1 - tr) * RGB[0];
-    color[1] = color[1] + throughput * (1 - tr) * RGB[1];
-    color[2] = color[2] + throughput * (1 - tr) * RGB[2];
+    color[0] = color[0] + throughput * (1 - tr) * RGB_0;
+    color[1] = color[1] + throughput * (1 - tr) * RGB_1;
+    color[2] = color[2] + throughput * (1 - tr) * RGB_2;
     
     throughput *= tr;
 
     t += step;
   }
 
-  return std::abs(color[0] - ref[0]) + std::abs(color[1] - ref[1]) + std::abs(color[2] - ref[2]);
+  L = std::abs(color[0] - ref[0]) + std::abs(color[1] - ref[1]) + std::abs(color[2] - ref[2]);
 }
 
-float RayGridLossGrad(float ref[3], float rayPos[3], float rayDir[3], double step, float boxFarNear[2], BoundingBox bb, Cell* grid, Cell* grid_d, size_t gridSize) {
-  auto f_dx = clad::gradient(RayGridLoss, "grid");
+float RayGridLossGrad(float ref[3], float rayPos[3], float rayDir[3], double step, float boxFarNear[2], float bbMin[3], float bbMax[3], float* grid, float* grid_d, size_t gridSize) {
+  auto f_dx = clad::gradient(RayGridLoss, "L, grid");
 
-  f_dx.execute(ref, rayPos, rayDir, step, boxFarNear, bb, grid, gridSize, grid_d);
-  return 0;
+  float L, dL;
+  f_dx.execute(L, ref, rayPos, rayDir, step, boxFarNear, bbMin, bbMax, grid, gridSize, &dL, grid_d);
+
+  // std::cout << L << ' ' << dL << std::endl;
+  return dL;
 }
+
 
 void RayMarcherExample::LoadModel(std::string densities, std::string sh) {
   std::cout << "Loading model\n";
@@ -430,8 +436,11 @@ void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, u
 
 void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, RayMarcherExample* pImpl_d) 
 {
-  RayMarcherExample pImpl_in;
-  pImpl_in.InitGrid(pImpl_d->gridSize);
+  std::vector<float> grid_densities(gridSize * gridSize * gridSize);
+  for (size_t i = 0; i < gridSize * gridSize * gridSize; i++)
+    grid_densities[i] = grid[i].density;
+
+  std::vector<float> grid_grad(gridSize * gridSize * gridSize, 0.0f);
 
   for(uint32_t y=0;y<height;y++) 
   {
@@ -471,12 +480,20 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
         tNearAndFar2[0] = tNearAndFar[0];
         tNearAndFar2[1] = tNearAndFar[1];
 
-        Cell* grid_data = grid.data();
-        Cell* grid_in_data = pImpl_in.grid.data();
+        float bbMin[3];
+        bbMin[0] = bb.min[0];
+        bbMin[1] = bb.min[1];
+        bbMin[2] = bb.min[2];
 
-        pImpl_in.zeroGrad();
-        float dL1 = RayGridLossGrad(res_pixel3, rayPos3, rayDir3, step, tNearAndFar2, bb, grid_data, grid_in_data, gridSize);
-        pImpl_d->optimizerStep(&pImpl_in, 1.0f);
+        float bbMax[3];
+        bbMax[0] = bb.max[0];
+        bbMax[1] = bb.max[1];
+        bbMax[2] = bb.max[2];
+
+        float dL1 = RayGridLossGrad(res_pixel3, rayPos3, rayDir3, step, tNearAndFar2, bbMin, bbMax, grid_densities.data(), grid_grad.data(), gridSize);
+
+        for (size_t i = 0; i < gridSize * gridSize * gridSize; i++)
+          pImpl_d->grid[i].density += grid_grad[i];
       }
     }
   }

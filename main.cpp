@@ -118,6 +118,7 @@ int main(int argc, const char** argv)
       std::cout << loss << ' ' << loss_d << std::endl;
     }
 
+
     i++;
   }
   

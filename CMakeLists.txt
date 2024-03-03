@@ -58,7 +58,7 @@ endif()
 #uncomment this to detect broken memory problems via gcc sanitizers
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fsanitize=leak -fsanitize=undefined -fsanitize=bounds-strict")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes -O0 -fopenmp -I /home/egorf/clad/inst/include -fplugin=/home/egorf/clad/inst/lib/clad.so")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes -O0 -fopenmp -I /home/egorf/clad/inst/include -fplugin=/home/egorf/clad/inst/lib/clad.so -Xclang -plugin-arg-clad -Xclang -fgenerate-source-file")
 
 if(USE_VULKAN)
   add_executable(testapp main.cpp 
