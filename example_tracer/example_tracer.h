@@ -44,8 +44,8 @@ public:
 
   void InitGrid(const float _gridSize) {
     gridSize = _gridSize;
-    grid.resize(gridSize * gridSize * gridSize, {0.1, {1, 1, 1, 1, 1, 1, 1, 1, 1},
-      {1, 1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 1, 1}});
+    grid.resize(gridSize * gridSize * gridSize, {0.01, {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1},
+      {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1}, {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1}});
     grid_grad.resize(gridSize  * gridSize * gridSize);
   }
   void SetBoundingBox(const float3 boxMin, const float3 boxMax) {
@@ -68,20 +68,55 @@ public:
         }
   }
 
-  void optimizerStep(RayMarcherExample* pImpl_d, float learning_rate) {
-    for (int z = 0; z < gridSize; z++)
-    for (int y = 0; y < gridSize; y++)
-      for (int x = 0; x < gridSize; x++) {
-        Cell* cell = &grid[z * gridSize * gridSize + y * gridSize + x];
-        Cell* cell_d = &pImpl_d->grid[z * gridSize * gridSize + y * gridSize + x];
+  void optimizerInit() {
+    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / 4;
 
-        cell->density += cell_d->density * learning_rate;
-        // for (int i = 0; i < 9; i++) {
-        //   cell->sh_r[i] += cell_d->sh_r[i] * learning_rate;
-        //   cell->sh_g[i] += cell_d->sh_g[i] * learning_rate;
-        //   cell->sh_b[i] += cell_d->sh_b[i] * learning_rate;
-        // }
-      }
+    // momentum.resize(vecSize);
+    // m_GSquare.resize(vecSize);
+    // std::fill(momentum.begin(), momentum.end(), 0.0);
+    // std::fill(m_GSquare.begin(), m_GSquare.end(), 0.0);
+
+    lr = 0.15f;
+    beta_1 = 0.9f;
+    beta_2 = 0.999f;
+    eps = 1e-8;
+    V = std::vector<float>(vecSize, 0);
+    S = std::vector<float>(vecSize, 0);
+  }
+
+  void optimizerStep(RayMarcherExample* pImpl_d, int iter) {
+    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / 4;
+
+    float* gridPtr = (float*)grid.data();
+    float* gridPtr_d = (float*)pImpl_d->grid.data();
+
+    // int factorGamma = iter/100 + 1;
+    // const float alpha   = 0.5;
+    // const float beta    = 0.25;
+    // const float gamma   = 0.25/factorGamma;
+    
+    // for(size_t i=0;i<momentum.size();i++)
+    // {
+    //   auto gradVal = gridPtr_d[i];
+    //   momentum [i] = momentum[i]*beta + gradVal*(float(1.0)-beta);
+    //   m_GSquare[i] = float(2.0)*(m_GSquare[i]*alpha + (gradVal*gradVal)*(float(1.0)-alpha)); // does not works without 2.0
+    // }
+    // std::cout << std::endl;
+
+    // for (size_t i=0;i<momentum.size();i++) 
+    //   gridPtr[i] -= (gamma*momentum[i]/(std::sqrt(m_GSquare[i] + epsilon)));
+
+    const auto b1 = std::pow(beta_1, iter + 1);
+    const auto b2 = std::pow(beta_2, iter + 1);
+    for (size_t i = 0; i < vecSize; i++)
+    {
+      auto g = gridPtr_d[i];
+      V[i] = beta_1 * V[i] + (1 - beta_1) * g;
+      auto Vh = V[i] / ((1) - b1);
+      S[i] = beta_2 * S[i] + (1 - beta_2) * g * g;
+      auto Sh = S[i] / ((1) - b2);
+      gridPtr[i] -= lr * Vh / (std::sqrt(Sh) + eps);
+    }
   }
 
   void LoadModel(std::string densities, std::string sh);
@@ -106,6 +141,14 @@ public:
   std::vector<Cell> grid;
   std::vector<Cell> grid_grad;
   size_t gridSize;
+
+  // std::vector<float> momentum; 
+  // std::vector<float> m_GSquare;
+  // float epsilon = 1e-8;
+
+  float lr, beta_1, beta_2, eps;
+  std::vector<float> V;
+  std::vector<float> S;
 
   BoundingBox bb;
 };
