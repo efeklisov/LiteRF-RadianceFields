@@ -8,6 +8,8 @@
 #include "LiteMath.h"
 using namespace LiteMath;
 
+const size_t SH_WIDTH = 9;
+
 const float C0 = 0.28209479177387814;
 const float C1 = 0.4886025119029199;
 const float C2[5] = {
@@ -20,9 +22,9 @@ const float C2[5] = {
 
 struct Cell {
   float density;
-  float sh_r[9];
-  float sh_g[9];
-  float sh_b[9];
+  float sh_r[SH_WIDTH];
+  float sh_g[SH_WIDTH];
+  float sh_b[SH_WIDTH];
 };
 
 struct BoundingBox {
@@ -44,8 +46,17 @@ public:
 
   void InitGrid(const float _gridSize) {
     gridSize = _gridSize;
-    grid.resize(gridSize * gridSize * gridSize, {0.01, {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1},
-      {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1}, {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1}});
+    grid.resize(gridSize * gridSize * gridSize);
+
+    for (size_t i = 0; i < gridSize * gridSize * gridSize; i++) {
+      grid[i].density = 0.01;
+      for (size_t j = 0; j < SH_WIDTH; j++) {
+        grid[i].sh_r[j] = 0.1;
+        grid[i].sh_g[j] = 0.1;
+        grid[i].sh_b[j] = 0.1;
+      }
+    }
+
     grid_grad.resize(gridSize  * gridSize * gridSize);
   }
   void SetBoundingBox(const float3 boxMin, const float3 boxMax) {
@@ -60,7 +71,7 @@ public:
           Cell* cell = &grid[z * gridSize * gridSize + y * gridSize + x];
           cell->density = 0.0f;
 
-          for (int i = 0; i < 9; i++) {
+          for (int i = 0; i < SH_WIDTH; i++) {
             cell->sh_r[i] = 0.0f;
             cell->sh_g[i] = 0.0f;
             cell->sh_b[i] = 0.0f;
@@ -69,7 +80,7 @@ public:
   }
 
   void optimizerInit() {
-    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / 4;
+    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
 
     // momentum.resize(vecSize);
     // m_GSquare.resize(vecSize);
@@ -85,7 +96,7 @@ public:
   }
 
   void optimizerStep(RayMarcherExample* pImpl_d, int iter) {
-    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / 4;
+    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
 
     float* gridPtr = (float*)grid.data();
     float* gridPtr_d = (float*)pImpl_d->grid.data();
@@ -124,8 +135,8 @@ public:
   void SetWorldViewMatrix(const float4x4& a_mat) {m_worldViewInv = inverse4x4(a_mat);}
   void SetWorldViewMProjatrix(const float4x4& a_mat) {m_worldViewProjInv = inverse4x4(a_mat);}
 
-  void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height, float4* L);
-  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, float4* L, RayMarcherExample* pImpl_d);
+  void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height);
+  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, RayMarcherExample* pImpl_d);
   void RayMarch(uint32_t* out_color [[size("width*height")]], uint32_t width, uint32_t height);  
 
   void CommitDeviceData() {}                                       // will be overriden in generated class
@@ -153,5 +164,5 @@ public:
   BoundingBox bb;
 };
 
-void L1Loss(float* loss, uint* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d, const char* fileName);
+void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d, const char* fileName);
 // void L1LossGrad(float* loss, float* loss_d, uint* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d);

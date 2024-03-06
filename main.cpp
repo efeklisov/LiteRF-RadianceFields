@@ -17,6 +17,9 @@ using json = nlohmann::json;
 std::shared_ptr<RayMarcherExample> CreateRayMarcherExample_Generated(vk_utils::VulkanContext a_ctx, size_t a_maxThreadsGenerated); 
 #endif
 
+const size_t OUTER_LOOP = 15;
+const size_t IMAGE_LOOP = 7;
+
 int main(int argc, const char** argv)
 {
   #ifndef NDEBUG
@@ -50,7 +53,7 @@ int main(int argc, const char** argv)
 
   //pImpl->SetBoundingBox(float3(-0.5, -0.5, -0.5), float3(0.5, 0.5, 0.5));
   pImpl->SetBoundingBox(float3(0, 0, 0), float3(1, 1, 1));
-  pImpl->LoadModel("../sigmat.json", "../sh_coeffs.json");
+  // pImpl->LoadModel("../sigmat.json", "../sh_coeffs.json");
 
   json cam_data;
   {
@@ -60,7 +63,7 @@ int main(int argc, const char** argv)
 
   stbi_set_flip_vertically_on_load(true);
 
-  for (int j = 0; j < 1; j++) {
+  for (int j = 0; j < OUTER_LOOP; j++) {
     // int i = 0;
     // for(const auto & cam : cam_data) 
     // {
@@ -106,20 +109,21 @@ int main(int argc, const char** argv)
       float timings[4] = {0,0,0,0};
       pImpl->GetExecutionTime("RayMarch", timings);
 
-      // std::stringstream inputImgStrStream;
-      // inputImgStrStream << "../data/radiance_fields/lego/train/r_" << i << ".png";
-      // std::string inputImgStr = inputImgStrStream.str();
-
-      // int WIDTH = WIN_WIDTH;
-      // int HEIGHT = WIN_HEIGHT
-      // int CHANNELS = 4;
-
-      // stbi_uc* input_raw = stbi_load(inputImgStr.c_str(), &WIDTH, &HEIGHT, &CHANNELS, CHANNELS);
-      // uint* input = (uint*)input_raw;
-
       // LiteImage::SaveBMP("buffer.bmp", input, WIDTH, HEIGHT);
+      
+      pImpl_d->zeroGrad();
+      for (int k = 0; k < IMAGE_LOOP; k++) {
+        std::stringstream inputImgStrStream;
+        inputImgStrStream << "../data/r_" << k << ".png";
+        std::string inputImgStr = inputImgStrStream.str();
 
-      for (int k = 0; k < 7; k++) {
+        int WIDTH = WIN_WIDTH;
+        int HEIGHT = WIN_HEIGHT;
+        int CHANNELS = 4;
+
+        float* input_raw = stbi_loadf(inputImgStr.c_str(), &WIDTH, &HEIGHT, &CHANNELS, CHANNELS);
+        float4* input = (float4*)input_raw;
+
         // float4x4 viewMat =  translate4x4(float3(0.5, 0.5, 0.5)) * rotate4x4Y(float(360.0 / 7 * k)*DEG_TO_RAD) * lookAt(float3(0.0, 0.0, 1.3), float3(0.0, 0.0, 0.0), float3(0.0, 1.0, 0.0));
         float4x4 viewMat =  lookAt(float3(0.0, 0.0, 1.3), float3(0.0, 0.0, 0.0), float3(0.0, 1.0, 0.0)) * rotate4x4Y(-float(360.0 / 7 * k)*DEG_TO_RAD) * translate4x4(float3(-0.5, -0.5, -0.5));
         pImpl->SetWorldViewMatrix(viewMat);
@@ -130,17 +134,18 @@ int main(int argc, const char** argv)
 
         float loss, loss_d;
 
-        std::vector<float4> L(WIN_WIDTH * WIN_HEIGHT);
-        pImpl->kernel2D_RayMarch(pixelData.data(), WIN_WIDTH, WIN_HEIGHT, L.data());
+        // std::vector<float4> L(WIN_WIDTH * WIN_HEIGHT);
+        // pImpl->kernel2D_RayMarch(pixelData.data(), WIN_WIDTH, WIN_HEIGHT, L.data());
 
-        LiteImage::SaveBMP(fileName.c_str(), pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
+        // LiteImage::SaveBMP(fileName.c_str(), pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
 
-        // pImpl_d->zeroGrad();
-        // L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), pImpl_d.get(), fileName.c_str());
-        // pImpl->optimizerStep(pImpl_d.get(), k);
-
+        // std::fill(pixelData.begin(), pixelData.end(), 0);
+        L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), pImpl_d.get(), fileName.c_str());
+        
         std::cout << loss << ' ' << loss_d << std::endl;
+        free(input);
       }
+      pImpl->optimizerStep(pImpl_d.get(), j);
 
     //   i++;
 

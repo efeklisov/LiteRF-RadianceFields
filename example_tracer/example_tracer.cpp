@@ -69,7 +69,7 @@ float sigmoid(float x) {
 inline Cell lerpCell(const Cell v0, const Cell v1, const float t) {
   Cell ret;
   ret.density = lerp(v0.density, v1.density, t);
-  for (size_t i = 0; i < 9; i++) {
+  for (size_t i = 0; i < SH_WIDTH; i++) {
     ret.sh_r[i] = lerp(v0.sh_r[i], v1.sh_r[i], t);  
     ret.sh_g[i] = lerp(v0.sh_g[i], v1.sh_g[i], t);  
     ret.sh_b[i] = lerp(v0.sh_b[i], v1.sh_b[i], t);
@@ -103,48 +103,38 @@ void sh_eval_2(const float3 &d, float *out) {
 }
 
 float eval_sh(float* sh, float3 rayDir) {
-  float sh_coeffs[9];
+  float sh_coeffs[SH_WIDTH];
   sh_eval_2(rayDir, sh_coeffs);
 
   float sum = 0.0f;
-  for (int i = 0; i < 9; i++)
+  for (int i = 0; i < SH_WIDTH; i++)
     sum += sh[i] * sh_coeffs[i];
 
   return sum;
 }
 
-float4 RayGridIntersection(bool mode, float3 L, float3 ray_pos, float3 ray_dir, double step, float2 boxFarNear, BoundingBox bb, Cell* grid, size_t gridSize)
+float3 RayGridIntersection(float3 ray_pos, float3 ray_dir, double step, float2 boxFarNear, BoundingBox bb, Cell* grid, size_t gridSize)
 {
-  float t_min = 1.0;
-  float t_max = 8.0;
+  float t_min = 0.0;
+  float t_max = 1000.0;
 
   if (t_min > boxFarNear.y)
-    return float4(L[0], L[1], L[2], 0.0f);
+    return float3(0.0f, 0.0f, 0.0f);
 
   float throughput = 1.0;
   float3 colour = float3(0.0);
 
-  float t = max(t_min, boxFarNear.x);
+  float t = max(t_min, boxFarNear.x) + step;
   while ((t < min(t_max, boxFarNear.y)) && (throughput > 0.01)) {
     float3 p = ray_pos + t * ray_dir;
 
     float3 coords01 = (p - bb.min) / (bb.max - bb.min);
-    float3 coords = coords01 * (float)(gridSize - 1);
+    float3 coords = coords01 * (float)(gridSize);
 
-    float3 closeCoords = coords - ray_dir * 0.5;
-    closeCoords[0] = round(closeCoords[0]);
-    closeCoords[1] = round(closeCoords[1]);
-    closeCoords[2] = round(closeCoords[2]);
+    int3 nearCoords = clamp((int3)coords, int3(0), int3(gridSize - 1));
+    int3 farCoords = clamp((int3)coords + int3(1), int3(0), int3(gridSize - 1));
 
-    float3 overCoords = coords + ray_dir * 0.5;
-    overCoords[0] = round(overCoords[0]);
-    overCoords[1] = round(overCoords[1]);
-    overCoords[2] = round(overCoords[2]);
-
-    float3 nearCoords = float3(min(closeCoords[0], overCoords[0]), min(closeCoords[1], overCoords[1]), min(closeCoords[2], overCoords[2]));
-    float3 farCoords = float3(max(closeCoords[0], overCoords[0]), max(closeCoords[1], overCoords[1]), max(closeCoords[2], overCoords[2]));
-
-    float3 lerpFactors = coords - nearCoords;
+    float3 lerpFactors = coords - (float3)nearCoords;
 
     Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
     Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
@@ -164,25 +154,25 @@ float4 RayGridIntersection(bool mode, float3 L, float3 ray_pos, float3 ray_dir, 
 
     // float3 RGB = float3(1.0, 1.0, 1.0);
     float3 RGB = float3(clamp(eval_sh(gridVal.sh_r, ray_dir), 0.0f, 1.0f), clamp(eval_sh(gridVal.sh_g, ray_dir), 0.0f, 1.0f), clamp(eval_sh(gridVal.sh_b, ray_dir), 0.0f, 1.0f));
-    colour = colour + (mode ? 1 : -1) * throughput * (1 - tr) * RGB;
+    colour = colour + throughput * (1 - tr) * RGB;
     
     throughput *= tr;
 
     t += step;
   }
 
-  return float4(colour[0], colour[1], colour[2], 1.0f);
+  return clamp(colour, 0.0, 1.0);
 }
 
-float RayGridLoss(float3 &ref, float3 &L, float3 &rayPos, float3 &rayDir, double &step, float2 &boxFarNear, BoundingBox &bb, Cell* &grid, size_t &gridSize) {
-  float4 color = RayGridIntersection(true, float3(0.0f), rayPos, rayDir, step, boxFarNear, bb, grid, gridSize);
+float RayGridLoss(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, float2 &boxFarNear, BoundingBox &bb, Cell* &grid, size_t &gridSize) {
+  float3 color = RayGridIntersection(rayPos, rayDir, step, boxFarNear, bb, grid, gridSize);
 
-  return std::abs(clamp(color[0], 0.0f, 1.0f) - ref[0]) + std::abs(clamp(color[1], 0.0f, 1.0f) - ref[1]) + std::abs(clamp(color[2], 0.0f, 1.0f) - ref[2]);
+  return std::abs(color[0] - ref[0]) + std::abs(color[1] - ref[1]) + std::abs(color[2] - ref[2]);
 }
 
-float RayGridLossGrad(float3 &ref, float3 &L, float3 &rayPos, float3 &rayDir, double &step, float2 &boxFarNear, BoundingBox &bb, Cell* &grid, Cell* &grid_d, size_t &gridSize) {
+float RayGridLossGrad(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, float2 &boxFarNear, BoundingBox &bb, Cell* &grid, Cell* &grid_d, size_t &gridSize) {
   return __enzyme_autodiff((void*)RayGridLoss, 
-    enzyme_const, &ref, enzyme_const, &L, enzyme_const, &rayPos, 
+    enzyme_const, &ref, enzyme_const, &rayPos, 
     enzyme_const, &rayDir, enzyme_const, &step, enzyme_const, &boxFarNear, 
     enzyme_const, &bb, enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize);
 }
@@ -198,7 +188,6 @@ void RayMarcherExample::LoadModel(std::string densities, std::string sh) {
 
     std::cout << "Loaded densities from disk\n";
   
-    #pragma openmp parallel for
     for (size_t z = 0; z < gridSize; z++)
       for (size_t y = 0; y < gridSize; y++)
         for (size_t x = 0; x < gridSize; x++) {
@@ -218,13 +207,12 @@ void RayMarcherExample::LoadModel(std::string densities, std::string sh) {
 
     std::cout << "Loaded SH coefficients from disk\n";
 
-    #pragma openmp parallel for
     for (size_t z = 0; z < gridSize; z++)
       for (size_t y = 0; y < gridSize; y++)
         for (size_t x = 0; x < gridSize; x++) {
           size_t gridIndex = indexGrid(x, y, z, gridSize);
 
-          for (size_t i = 0; i < 9; i++) {
+          for (size_t i = 0; i < SH_WIDTH; i++) {
             grid[gridIndex].sh_r[i] = sh_data[z][y][x][i * 3];
             grid[gridIndex].sh_g[i] = sh_data[z][y][x][1 + i * 3];
             grid[gridIndex].sh_b[i] = sh_data[z][y][x][2 + i * 3];
@@ -301,33 +289,26 @@ static inline float4 Uint32ToRealColor(uint color) {
 //   __enzyme_autodiff(L1Loss, enzyme_dup, loss, loss_d, enzyme_const, ref, enzyme_const, gen, enzyme_const, width, enzyme_const, height, enzyme_dup, pImpl, pImpl_d);
 // }
 
-void L1Loss(float* loss, uint* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d, const char* fileName) {
+void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d, const char* fileName) {
   *loss = 0.0f;
 
-  std::vector<float4> L(width * height);
-  std::vector<float4> ref_float(width * height);
+  pImpl->kernel2D_RayMarchGrad(width, height, ref, pImpl_d);  
 
-  pImpl->kernel2D_RayMarch(gen, width, height, L.data());
+  pImpl->kernel2D_RayMarch(gen, width, height);
 
   LiteImage::SaveBMP(fileName, gen, width, height);
 
-  #pragma openmp parallel for
   for (int y = 0; y < height; y++)
     for (int x = 0; x < width; x++) {
-      float4 ref_pixel = Uint32ToRealColor(ref[y * width + x]);
-      float4 gen_pixel = L[y * width + x];
+      float4 ref_pixel = ref[y * width + x];
+      float4 gen_pixel = Uint32ToRealColor(gen[y * width + x]);
 
       *loss += abs(ref_pixel[0] - gen_pixel[0]) + abs(ref_pixel[1] - gen_pixel[1]) + abs(ref_pixel[2] - gen_pixel[2]);
-      ref_float[y*width + x] = ref_pixel;
     }
-
-  pImpl->kernel2D_RayMarchGrad(width, height, ref_float.data(), L.data(), pImpl_d);
-  
 }
 
-void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height, float4* L) 
+void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height) 
 {
-  #pragma openmp parallel for
   for(uint32_t y=0;y<height;y++) 
   {
     for(uint32_t x=0;x<width;x++) 
@@ -344,20 +325,20 @@ void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, u
       //if (RaySphereIntersection(rayPos, rayDir, 0.05))
       {
         float step = (bb.max[0] - bb.min[0]) / gridSize;
-        resColor = RayGridIntersection(true, float3(0.0f), rayPos, rayDir, step, tNearAndFar, bb, grid.data(), gridSize);
+        float3 color = RayGridIntersection(rayPos, rayDir, step, tNearAndFar, bb, grid.data(), gridSize);
+        resColor = float4(color[0], color[1], color[2], 1.0f);
 
         // float alpha = 1.0f;
         // resColor = float4(1.0f);
 	      // resColor = RayMarchConstantFog(tNearAndFar.x, tNearAndFar.y, alpha);
       }
       
-      L[y * width + x] = resColor;
       out_color[y*width+x] = RealColorToUint32(resColor);
     }
   }
 }
 
-void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, float4* L, RayMarcherExample* pImpl_d) 
+void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, RayMarcherExample* pImpl_d) 
 {
   for(uint32_t y=0;y<height;y++) 
   {
@@ -376,22 +357,11 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
         double step = (bb.max[0] - bb.min[0]) / gridSize;
 
         float4 res_pixel = res[y*width+x];
-        float4 L_pixel = L[y*width+x];
-
-        float3 res_pixel3;
-        res_pixel3[0] = res_pixel[0];
-        res_pixel3[1] = res_pixel[1];
-        res_pixel3[2] = res_pixel[2];
-
-        float3 L_pixel3;
-        L_pixel3[0] = L_pixel[0];
-        L_pixel3[1] = L_pixel[1];
-        L_pixel3[2] = L_pixel[2];
 
         Cell* grid_data = grid.data();
         Cell* grid_in_data = pImpl_d->grid.data();
 
-        float dL1 = RayGridLossGrad(res_pixel3, L_pixel3, rayPos, rayDir, step, tNearAndFar, bb, grid_data, grid_in_data, gridSize);
+        float dL1 = RayGridLossGrad(res_pixel, rayPos, rayDir, step, tNearAndFar, bb, grid_data, grid_in_data, gridSize);
       }
     }
   }
