@@ -51,6 +51,10 @@ int main(int argc, const char** argv)
   pImpl->optimizerInit();
   pImpl_d->InitGrid(gridSize);
 
+  // std::ifstream fout("model.dat", std::ios::in | std::ios::binary);
+  // fout.read((char*)&pImpl->grid[0], pImpl->grid.size() * sizeof(Cell));
+  // fout.close();
+
   //pImpl->SetBoundingBox(float3(-0.5, -0.5, -0.5), float3(0.5, 0.5, 0.5));
   pImpl->SetBoundingBox(float3(0, 0, 0), float3(1, 1, 1));
   // pImpl->LoadModel("../sigmat.json", "../sh_coeffs.json");
@@ -135,11 +139,10 @@ int main(int argc, const char** argv)
         float loss, loss_d;
 
         // std::vector<float4> L(WIN_WIDTH * WIN_HEIGHT);
-        // pImpl->kernel2D_RayMarch(pixelData.data(), WIN_WIDTH, WIN_HEIGHT, L.data());
+        // pImpl->kernel2D_RayMarch(pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
 
         // LiteImage::SaveBMP(fileName.c_str(), pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
 
-        // std::fill(pixelData.begin(), pixelData.end(), 0);
         L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), pImpl_d.get(), fileName.c_str());
         
         std::cout << loss << ' ' << loss_d << std::endl;
@@ -152,7 +155,12 @@ int main(int argc, const char** argv)
     //   if (i == 10) break;
     // }
   }
-  
+
+  // std::ofstream fout("model.dat", std::ios::out | std::ios::binary);
+  // fout.write((char*)&pImpl->grid[0], pImpl->grid.size() * sizeof(Cell));
+  // fout.close();
+
   pImpl = nullptr;
+  pImpl_d = nullptr;
   return 0;
 }
