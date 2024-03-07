@@ -130,6 +130,8 @@ public:
     }
   }
 
+  void UpsampleGrid();
+
   void LoadModel(std::string densities, std::string sh);
 
   void SetWorldViewMatrix(const float4x4& a_mat) {m_worldViewInv = inverse4x4(a_mat);}

@@ -177,6 +177,37 @@ float RayGridLossGrad(float4 &ref, float3 &rayPos, float3 &rayDir, double &step,
     enzyme_const, &bb, enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize);
 }
 
+void RayMarcherExample::UpsampleGrid() {
+  size_t oldGridSize = gridSize;
+  gridSize *= 2;
+  float step = 1.0f / (float) gridSize;
+
+  std::vector<Cell> newGrid(gridSize * gridSize * gridSize);
+  for (size_t z = 0; z < gridSize; z++)
+    for (size_t y = 0; y < gridSize; y++)
+      for (size_t x = 0; x < gridSize; x++) {
+          float3 coords = (float3(0.0f) + step * (float3(x, y, z) + 0.5f)) * oldGridSize;
+          // std::cout << coords[0] << ' ' << coords[1] << ' ' << coords[2] << std::endl;
+
+          int3 nearCoords = clamp((int3)coords, int3(0), int3(oldGridSize - 1));
+          int3 farCoords = clamp((int3)coords + int3(1), int3(0), int3(oldGridSize - 1));
+
+          float3 lerpFactors = coords - (float3)nearCoords;
+
+          Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], oldGridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], oldGridSize)], lerpFactors.x);
+          Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], oldGridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], oldGridSize)], lerpFactors.x);
+          Cell xy01 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], oldGridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], oldGridSize)], lerpFactors.x);
+          Cell xy11 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], oldGridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], oldGridSize)], lerpFactors.x);
+
+          Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
+          Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
+
+          newGrid[indexGrid(x, y, z, gridSize)] = lerpCell(xyz0, xyz1, lerpFactors.z);
+      }
+
+  grid = newGrid;
+}
+
 void RayMarcherExample::LoadModel(std::string densities, std::string sh) {
   std::cout << "Loading model\n";
   {
