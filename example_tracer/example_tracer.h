@@ -48,6 +48,7 @@ public:
     gridSize = _gridSize;
     grid.resize(gridSize * gridSize * gridSize);
 
+    #pragma omp parallel for
     for (size_t i = 0; i < gridSize * gridSize * gridSize; i++) {
       grid[i].density = 0.01;
       for (size_t j = 0; j < SH_WIDTH; j++) {
@@ -56,19 +57,23 @@ public:
         grid[i].sh_b[j] = 0.1;
       }
     }
-
-    grid_grad.resize(gridSize  * gridSize * gridSize);
   }
+
+  void InitGrad() {
+    grid_d.resize(gridSize  * gridSize * gridSize);
+  }
+
   void SetBoundingBox(const float3 boxMin, const float3 boxMax) {
     bb.min = boxMin;
     bb.max = boxMax;
   }
 
   void zeroGrad() {
+    #pragma omp parallel for
     for (int z = 0; z < gridSize; z++)
       for (int y = 0; y < gridSize; y++)
         for (int x = 0; x < gridSize; x++) {
-          Cell* cell = &grid[z * gridSize * gridSize + y * gridSize + x];
+          Cell* cell = &grid_d[z * gridSize * gridSize + y * gridSize + x];
           cell->density = 0.0f;
 
           for (int i = 0; i < SH_WIDTH; i++) {
@@ -95,11 +100,11 @@ public:
     S = std::vector<float>(vecSize, 0);
   }
 
-  void optimizerStep(RayMarcherExample* pImpl_d, int iter) {
+  void optimizerStep(int iter) {
     const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
 
     float* gridPtr = (float*)grid.data();
-    float* gridPtr_d = (float*)pImpl_d->grid.data();
+    float* gridPtr_d = (float*)grid_d.data();
 
     // int factorGamma = iter/100 + 1;
     // const float alpha   = 0.5;
@@ -138,7 +143,7 @@ public:
   void SetWorldViewMProjatrix(const float4x4& a_mat) {m_worldViewProjInv = inverse4x4(a_mat);}
 
   void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height);
-  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, RayMarcherExample* pImpl_d);
+  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res);
   void RayMarch(uint32_t* out_color [[size("width*height")]], uint32_t width, uint32_t height);  
 
   void CommitDeviceData() {}                                       // will be overriden in generated class
@@ -152,7 +157,7 @@ public:
   float    rayMarchTime;
 
   std::vector<Cell> grid;
-  std::vector<Cell> grid_grad;
+  std::vector<Cell> grid_d;
   size_t gridSize;
 
   // std::vector<float> momentum; 
@@ -166,5 +171,5 @@ public:
   BoundingBox bb;
 };
 
-void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d, const char* fileName);
+void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, const char* fileName);
 // void L1LossGrad(float* loss, float* loss_d, uint* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d);

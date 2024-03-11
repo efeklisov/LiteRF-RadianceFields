@@ -183,6 +183,8 @@ void RayMarcherExample::UpsampleGrid() {
   float step = 1.0f / (float) gridSize;
 
   std::vector<Cell> newGrid(gridSize * gridSize * gridSize);
+
+  #pragma omp parallel for
   for (size_t z = 0; z < gridSize; z++)
     for (size_t y = 0; y < gridSize; y++)
       for (size_t x = 0; x < gridSize; x++) {
@@ -320,15 +322,16 @@ static inline float4 Uint32ToRealColor(uint color) {
 //   __enzyme_autodiff(L1Loss, enzyme_dup, loss, loss_d, enzyme_const, ref, enzyme_const, gen, enzyme_const, width, enzyme_const, height, enzyme_dup, pImpl, pImpl_d);
 // }
 
-void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d, const char* fileName) {
+void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, const char* fileName) {
   *loss = 0.0f;
 
-  pImpl->kernel2D_RayMarchGrad(width, height, ref, pImpl_d);  
+  pImpl->kernel2D_RayMarchGrad(width, height, ref);  
 
   pImpl->kernel2D_RayMarch(gen, width, height);
 
   LiteImage::SaveBMP(fileName, gen, width, height);
 
+  #pragma omp parallel for
   for (int y = 0; y < height; y++)
     for (int x = 0; x < width; x++) {
       float4 ref_pixel = ref[y * width + x];
@@ -340,6 +343,7 @@ void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarch
 
 void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height) 
 {
+  #pragma omp parallel for
   for(uint32_t y=0;y<height;y++) 
   {
     for(uint32_t x=0;x<width;x++) 
@@ -369,8 +373,9 @@ void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, u
   }
 }
 
-void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, RayMarcherExample* pImpl_d) 
+void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res) 
 {
+  #pragma omp parallel for
   for(uint32_t y=0;y<height;y++) 
   {
     for(uint32_t x=0;x<width;x++) 
@@ -379,18 +384,20 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
       float3 rayPos = float3(0.0f, 0.0f, 0.0f);
 
       transform_ray3f(m_worldViewInv, &rayPos, &rayDir);
-      
+
       float2 tNearAndFar = RayBoxIntersection(rayPos, rayDir, bb.min, bb.max);
+      
       
       if(tNearAndFar.x < tNearAndFar.y)
       //if (RaySphereIntersection(rayPos, rayDir, 0.05))
       {
+
         double step = (bb.max[0] - bb.min[0]) / gridSize;
 
         float4 res_pixel = res[y*width+x];
 
         Cell* grid_data = grid.data();
-        Cell* grid_in_data = pImpl_d->grid.data();
+        Cell* grid_in_data = grid_d.data();
 
         float dL1 = RayGridLossGrad(res_pixel, rayPos, rayDir, step, tNearAndFar, bb, grid_data, grid_in_data, gridSize);
       }
@@ -399,9 +406,9 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
 
   float avgVal = 0.0f;
   float maxVal = 0.0f;
-  for(size_t i = 0; i < pImpl_d->gridSize; i++)
+  for(size_t i = 0; i < gridSize; i++)
   {
-    Cell currCell = pImpl_d->grid[i];
+    Cell currCell = grid_d[i];
 
     avgVal += currCell.density;
     avgVal += currCell.sh_r[0];
@@ -414,7 +421,7 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
     maxVal = std::max(maxVal, currCell.sh_b[0]);
   }
 
-  std::cout << "avgVal = " << avgVal/float(pImpl_d->gridSize) << std::endl;
+  std::cout << "avgVal = " << avgVal/float(gridSize) << std::endl;
   std::cout << "maxVal = " << maxVal << std::endl;
 }
 

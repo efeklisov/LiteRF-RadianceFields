@@ -30,7 +30,6 @@ int main(int argc, const char** argv)
   #endif
 
   std::shared_ptr<RayMarcherExample> pImpl = nullptr;
-  std::shared_ptr<RayMarcherExample> pImpl_d = nullptr;
   #ifdef USE_VULKAN
   bool onGPU = true; // TODO: you can read it from command line
   if(onGPU)
@@ -43,14 +42,13 @@ int main(int argc, const char** argv)
   bool onGPU = false;
   #endif
     pImpl = std::make_shared<RayMarcherExample>();
-    pImpl_d = std::make_shared<RayMarcherExample>();
 
   pImpl->CommitDeviceData();
 
   const size_t gridSize = 16;
   pImpl->InitGrid(gridSize);
   pImpl->optimizerInit();
-  pImpl_d->InitGrid(gridSize);
+  pImpl->InitGrad();
 
   // std::ifstream fout("model.dat", std::ios::in | std::ios::binary);
   // fout.read((char*)&pImpl->grid[0], pImpl->grid.size() * sizeof(Cell));
@@ -81,7 +79,7 @@ int main(int argc, const char** argv)
         float timings[4] = {0,0,0,0};
         pImpl->GetExecutionTime("RayMarch", timings);
         
-        pImpl_d->zeroGrad();
+        pImpl->zeroGrad();
         for (int k = 0; k < IMAGE_LOOP; k++) {
           std::stringstream inputImgStrStream;
           inputImgStrStream << "../data/r_" << k << ".png";
@@ -107,18 +105,17 @@ int main(int argc, const char** argv)
           // pImpl->kernel2D_RayMarch(pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
 
           // LiteImage::SaveBMP(fileName.c_str(), pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
-
-          L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), pImpl_d.get(), fileName.c_str());
+          L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), fileName.c_str());
           
           std::cout << loss << ' ' << loss_d << std::endl;
           free(input);
         }
-        pImpl->optimizerStep(pImpl_d.get(), j);
+        pImpl->optimizerStep(j);
     }
 
     if (i < UPSAMPLE_LOOP - 1) {
       pImpl->UpsampleGrid();
-      pImpl_d->InitGrid(pImpl->gridSize);
+      pImpl->InitGrad();
       pImpl->optimizerInit();
     }
   }
@@ -128,6 +125,5 @@ int main(int argc, const char** argv)
   // fout.close();
 
   pImpl = nullptr;
-  pImpl_d = nullptr;
   return 0;
 }
