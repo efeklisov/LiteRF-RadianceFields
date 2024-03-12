@@ -111,19 +111,24 @@ int main(int argc, const char** argv)
           free(input);
         }
         pImpl->optimizerStep(j);
+        pImpl->RebuildOctree();
     }
 
     if (i < UPSAMPLE_LOOP - 1) {
+      std::cout << "Upsample start" << std::endl;
       pImpl->UpsampleGrid();
       pImpl->InitGrad();
       pImpl->optimizerInit();
+      pImpl->RebuildOctree();
+      std::cout << "Upsample end" << std::endl;
     }
   }
 
   // std::ofstream fout("model.dat", std::ios::out | std::ios::binary);
   // fout.write((char*)&pImpl->grid[0], pImpl->grid.size() * sizeof(Cell));
   // fout.close();
-
+  std::cout << "Cleanup start" << std::endl;
   pImpl = nullptr;
+  std::cout << "Cleanup end" << std::endl;
   return 0;
 }

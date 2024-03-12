@@ -4,7 +4,7 @@ project (simplerf)
 # get rid of annoying MSVC warnings.
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
-set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CXX_STANDARD 20)
 option(USE_VULKAN "Enable GPU implementation via Vulkan" OFF)
 
 option(USE_ENZYME "Enable Enzyme AD" OFF)
@@ -48,6 +48,7 @@ else()
   include_directories("external/LiteMath")
 endif()
 
+include_directories("./external/Octree")
 include_directories("./external/nlohmann")
 include_directories("./external")
 include_directories(".")
