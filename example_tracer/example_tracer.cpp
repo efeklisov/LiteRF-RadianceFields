@@ -113,12 +113,11 @@ float eval_sh(float* sh, float3 rayDir) {
   return sum;
 }
 
-float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* grid, size_t gridSize, float& opacityLoss)
+float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* grid, size_t gridSize)
 {
   float throughput = 1.0;
   float3 colour = float3(0.0);
 
-  opacityLoss = 0.0f;
   float tPrev = -1;
   for (const size_t i : intersects) {
     float3 bbMin = float3(boxes[i].Min[0], boxes[i].Min[1], boxes[i].Min[2]);
@@ -156,8 +155,6 @@ float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step, const std:
     if (gridVal.density < 0.0)
       gridVal.density = 0.0;
 
-    opacityLoss += log(1 + 2 * gridVal.density * gridVal.density);
-
     float tr = exp(-gridVal.density * actualStep);
 
     float3 RGB = float3(clamp(eval_sh(gridVal.sh_r, rayDir), 0.0f, 1.0f), clamp(eval_sh(gridVal.sh_g, rayDir), 0.0f, 1.0f), clamp(eval_sh(gridVal.sh_b, rayDir), 0.0f, 1.0f));
@@ -170,18 +167,107 @@ float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step, const std:
   return clamp(colour, 0.0, 1.0);
 }
 
-float RayGridLoss(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, size_t &gridSize) {
-  float opacityLoss;
-  float3 color = RayGridIntersection(rayPos, rayDir, step, intersects, boxes, grid, gridSize, opacityLoss);
+float OpacityLoss(float3 &rayPos, float3 &rayDir, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, size_t &gridSize) {
+  float ret = 0.0f;
 
-  return std::abs(color[0] - ref[0]) + std::abs(color[1] - ref[1]) + std::abs(color[2] - ref[2]) + 0.001 * opacityLoss;
+  for (const size_t i : intersects) {
+    float3 bbMin = float3(boxes[i].Min[0], boxes[i].Min[1], boxes[i].Min[2]);
+    float3 bbMax = float3(boxes[i].Max[0], boxes[i].Max[1], boxes[i].Max[2]);
+
+    float2 tNearAndFar = RayBoxIntersection(rayPos, rayDir, bbMin, bbMax);
+
+    float t = (tNearAndFar.x + tNearAndFar.y) / 2.0f;
+    float3 p = rayPos + t * rayDir;
+
+    float3 lerpFactors = (p - bbMin) / (bbMax - bbMin);
+
+    int3 nearCoords = clamp((int3)(bbMin * gridSize), 0, gridSize - 1);
+    int3 farCoords = clamp(nearCoords + 1, 0, gridSize - 1);
+
+    Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
+    Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
+    Cell xy01 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], gridSize)], lerpFactors.x);
+    Cell xy11 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], gridSize)], lerpFactors.x);
+
+    Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
+    Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
+
+    Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
+
+    ret += log(1.0f + 2.0f * gridVal.density * gridVal.density);
+  }
+
+  return 0.001 * ret;
 }
 
-float RayGridLossGrad(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, Cell* &grid_d, size_t &gridSize) {
+float TVRegularisation(size_t &x, size_t &y, size_t &z, Cell* &grid, size_t &gridSize) {
+  float ret = 0.0f;
+
+  float lambda_density = 0.01f;
+  float lambda_SH = 0.01f;
+
+  auto getVoxel = [&](size_t x, size_t y, size_t z) {
+    float3 coords = float3(x, y, z) + 0.5f;
+
+    int3 nearCoords = clamp((int3)coords, int3(0), int3(gridSize - 1));
+    int3 farCoords = clamp((int3)coords + int3(1), int3(0), int3(gridSize - 1));
+
+    float3 lerpFactors = coords - (float3)nearCoords;
+
+    Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
+    Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
+    Cell xy01 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], gridSize)], lerpFactors.x);
+    Cell xy11 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], gridSize)], lerpFactors.x);
+
+    Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
+    Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
+
+    return lerpCell(xyz0, xyz1, lerpFactors.z);
+  };
+
+  Cell voxel = getVoxel(x, y, z);
+  Cell voxelX = getVoxel(x + 1, y, z);
+  Cell voxelY = getVoxel(x, y + 1, z);
+  Cell voxelZ = getVoxel(x, y, z + 1);
+
+  ret += lambda_density * sqrt((voxel.density - voxelX.density) * (voxel.density - voxelX.density) + (voxel.density - voxelY.density) * (voxel.density - voxelY.density) + (voxel.density - voxelZ.density) * (voxel.density - voxelZ.density));
+
+  for (size_t i = 0; i < SH_WIDTH; i++)
+    ret += lambda_SH * sqrt((voxel.sh_r[i] - voxelX.sh_r[i]) * (voxel.sh_r[i] - voxelX.sh_r[i]) + (voxel.sh_r[i] - voxelY.sh_r[i]) * (voxel.sh_r[i] - voxelY.sh_r[i]) + (voxel.sh_r[i] - voxelZ.sh_r[i]) * (voxel.sh_r[i] - voxelZ.sh_r[i]));
+  
+  for (size_t i = 0; i < SH_WIDTH; i++)
+    ret += lambda_SH * sqrt((voxel.sh_g[i] - voxelX.sh_g[i]) * (voxel.sh_g[i] - voxelX.sh_g[i]) + (voxel.sh_g[i] - voxelY.sh_g[i]) * (voxel.sh_g[i] - voxelY.sh_g[i]) + (voxel.sh_g[i] - voxelZ.sh_g[i]) * (voxel.sh_g[i] - voxelZ.sh_g[i]));
+  
+  for (size_t i = 0; i < SH_WIDTH; i++)
+    ret += lambda_SH * sqrt((voxel.sh_b[i] - voxelX.sh_b[i]) * (voxel.sh_b[i] - voxelX.sh_b[i]) + (voxel.sh_b[i] - voxelY.sh_b[i]) * (voxel.sh_b[i] - voxelY.sh_b[i]) + (voxel.sh_b[i] - voxelZ.sh_b[i]) * (voxel.sh_b[i] - voxelZ.sh_b[i]));
+
+  return ret;
+}
+
+float TVRegularisationGrad(size_t &x, size_t &y, size_t &z, Cell* &grid, Cell* &grid_d, size_t &gridSize) {
+  return __enzyme_autodiff((void*)TVRegularisation, 
+    enzyme_const, &x, enzyme_const, &y, enzyme_const, &z,
+    enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize);
+}
+
+float OpacityLossGrad(float3 &rayPos, float3 &rayDir, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, Cell* &grid_d, size_t &gridSize) {
+  return __enzyme_autodiff((void*)OpacityLoss, 
+    enzyme_const, &rayPos, 
+    enzyme_const, &rayDir, enzyme_const, &intersects,
+    enzyme_const, &boxes, enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize);
+}
+
+float RayGridLoss(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, size_t &gridSize, float &width, float &height) {
+  float3 color = RayGridIntersection(rayPos, rayDir, step, intersects, boxes, grid, gridSize);
+
+  return abs(color[0] - ref[0]) + abs(color[1] - ref[1]) + abs(color[2] - ref[2]);
+}
+
+float RayGridLossGrad(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, Cell* &grid_d, size_t &gridSize, float &width, float &height) {
   return __enzyme_autodiff((void*)RayGridLoss, 
     enzyme_const, &ref, enzyme_const, &rayPos, 
     enzyme_const, &rayDir, enzyme_const, &step, enzyme_const, &intersects, 
-    enzyme_const, &boxes, enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize);
+    enzyme_const, &boxes, enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize, enzyme_const, &width, enzyme_const, &height);
 }
 
 void RayMarcherExample::UpsampleGrid() {
@@ -243,7 +329,7 @@ void RayMarcherExample::RebuildOctree() {
 
         Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
 
-        if (gridVal.density > 0.01)
+        // if (gridVal.density > 0.01)
           boxes.push_back(OrthoTree::BoundingBox3D {{(float) x / (float) gridSize, (float) y / (float) gridSize, (float) z / (float) gridSize}, 
               {(float) (x + 1) / (float) gridSize, (float) (y + 1) / (float) gridSize, (float) (z + 1) / (float) gridSize}});
       }
@@ -369,6 +455,7 @@ void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarch
 
   std::cout << "Running learning kernel start" << std::endl;
   pImpl->kernel2D_RayMarchGrad(width, height, ref);  
+  pImpl->kernel2D_TVGrad();
   std::cout << "Running learning kernel end" << std::endl;
 
   pImpl->kernel2D_RayMarch(gen, width, height);
@@ -403,9 +490,8 @@ void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, u
       if(intersects.size())
       //if (RaySphereIntersection(rayPos, rayDir, 0.05))
       {
-        float opacityLoss;
         float step = (bb.max[0] - bb.min[0]) / (gridSize);
-        float3 color = RayGridIntersection(rayPos, rayDir, step, intersects, boxes, grid.data(), gridSize, opacityLoss);
+        float3 color = RayGridIntersection(rayPos, rayDir, step, intersects, boxes, grid.data(), gridSize);
         resColor = float4(color[0], color[1], color[2], 1.0f);
 
         // float alpha = 1.0f;
@@ -448,7 +534,11 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
         Cell* grid_data = grid.data();
         Cell* grid_in_data = grid_d.data();
 
-        float dL1 = RayGridLossGrad(res_pixel, rayPos, rayDir, step, intersects, boxes, grid_data, grid_in_data, gridSize);
+        float fwidth = width;
+        float fheight = height;
+
+        float dL1 = RayGridLossGrad(res_pixel, rayPos, rayDir, step, intersects, boxes, grid_data, grid_in_data, gridSize, fwidth, fheight);
+        float dOpacity = OpacityLossGrad(rayPos, rayDir, intersects, boxes, grid_data, grid_in_data, gridSize);
       }
     }
   }
@@ -472,6 +562,19 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
 
   std::cout << "avgVal = " << avgVal/float(gridSize) << std::endl;
   std::cout << "maxVal = " << maxVal << std::endl;
+}
+
+void RayMarcherExample::kernel2D_TVGrad() 
+{
+  #pragma omp parallel for
+  for (size_t z = 0; z < gridSize - 1; z++)
+    for (size_t y = 0; y < gridSize - 1; y++)
+      for (size_t x = 0; x < gridSize - 1; x++) {
+        Cell* grid_data = grid.data();
+        Cell* grid_in_data = grid_d.data();
+
+        TVRegularisationGrad(x, y, z, grid_data, grid_in_data, gridSize);
+      }
 }
 
 void RayMarcherExample::RayMarch(uint32_t* out_color, uint32_t width, uint32_t height)

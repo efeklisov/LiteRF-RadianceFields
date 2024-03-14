@@ -171,6 +171,7 @@ public:
 
   void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height);
   void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res);
+  void kernel2D_TVGrad();
   void RayMarch(uint32_t* out_color [[size("width*height")]], uint32_t width, uint32_t height);  
 
   void CommitDeviceData() {}                                       // will be overriden in generated class

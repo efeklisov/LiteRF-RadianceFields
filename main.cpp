@@ -17,7 +17,7 @@ using json = nlohmann::json;
 std::shared_ptr<RayMarcherExample> CreateRayMarcherExample_Generated(vk_utils::VulkanContext a_ctx, size_t a_maxThreadsGenerated); 
 #endif
 
-const size_t UPSAMPLE_LOOP = 4;
+const size_t UPSAMPLE_LOOP = 5;
 const size_t OUTER_LOOP = 15;
 const size_t IMAGE_LOOP = 7;
 
@@ -111,7 +111,6 @@ int main(int argc, const char** argv)
           free(input);
         }
         pImpl->optimizerStep(j);
-        pImpl->RebuildOctree();
     }
 
     if (i < UPSAMPLE_LOOP - 1) {
