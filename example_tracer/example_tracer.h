@@ -8,6 +8,8 @@
 #include "LiteMath.h"
 using namespace LiteMath;
 
+#include <Octree/octree.h>
+
 const size_t SH_WIDTH = 9;
 
 const float C0 = 0.28209479177387814;
@@ -45,30 +47,59 @@ public:
   }
 
   void InitGrid(const float _gridSize) {
+    std::cout << "Init grid start" << std::endl;
+
     gridSize = _gridSize;
     grid.resize(gridSize * gridSize * gridSize);
 
-    for (size_t i = 0; i < gridSize * gridSize * gridSize; i++) {
-      grid[i].density = 0.01;
-      for (size_t j = 0; j < SH_WIDTH; j++) {
-        grid[i].sh_r[j] = 0.1;
-        grid[i].sh_g[j] = 0.1;
-        grid[i].sh_b[j] = 0.1;
-      }
-    }
+    #pragma omp parallel for
+    for (size_t z = 0; z < gridSize; z++)
+      for (size_t y = 0; y < gridSize; y++)
+        for (size_t x = 0; x < gridSize; x++) {
+          size_t i = x + y * gridSize + z * gridSize * gridSize;
 
-    grid_grad.resize(gridSize  * gridSize * gridSize);
+          grid[i].density = 0.01;
+          for (size_t j = 0; j < SH_WIDTH; j++) {
+            grid[i].sh_r[j] = 0.1;
+            grid[i].sh_g[j] = 0.1;
+            grid[i].sh_b[j] = 0.1;
+          }
+        }
+
+    boxes.resize((gridSize - 1) * (gridSize - 1) * (gridSize - 1));
+
+    #pragma omp parallel for
+    for (size_t z = 0; z < gridSize - 1; z++)
+      for (size_t y = 0; y < gridSize - 1; y++)
+        for (size_t x = 0; x < gridSize - 1; x++) {
+          size_t i = x + y * (gridSize - 1) + z * (gridSize - 1) * (gridSize - 1);
+
+          boxes[i] = OrthoTree::BoundingBox3D {{(float) x / (float) gridSize, (float) y / (float) gridSize, (float) z / (float) gridSize}, 
+              {(float) (x + 1) / (float) gridSize, (float) (y + 1) / (float) gridSize, (float) (z + 1) / (float) gridSize}};
+        }
+
+    std::cout << "Creating octree start" << std::endl;
+    octree = OrthoTree::OctreeBoxC::Create(boxes);
+    std::cout << "Creating octree end" << std::endl;
+
+    std::cout << "Init grid end" << std::endl;
   }
+
+  void InitGrad() {
+    grid_d.resize(gridSize  * gridSize * gridSize);
+  }
+
   void SetBoundingBox(const float3 boxMin, const float3 boxMax) {
     bb.min = boxMin;
     bb.max = boxMax;
   }
 
   void zeroGrad() {
+    #pragma omp parallel for
     for (int z = 0; z < gridSize; z++)
       for (int y = 0; y < gridSize; y++)
         for (int x = 0; x < gridSize; x++) {
-          Cell* cell = &grid[z * gridSize * gridSize + y * gridSize + x];
+          Cell* cell = &grid_d[z * gridSize * gridSize + y * gridSize + x];
           cell->density = 0.0f;
 
           for (int i = 0; i < SH_WIDTH; i++) {
@@ -95,11 +126,11 @@ public:
     S = std::vector<float>(vecSize, 0);
   }
 
-  void optimizerStep(RayMarcherExample* pImpl_d, int iter) {
+  void optimizerStep(int iter) {
     const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
 
     float* gridPtr = (float*)grid.data();
-    float* gridPtr_d = (float*)pImpl_d->grid.data();
+    float* gridPtr_d = (float*)grid_d.data();
 
     // int factorGamma = iter/100 + 1;
     // const float alpha   = 0.5;
@@ -130,15 +161,60 @@ public:
     }
   }
 
+
+  void optimizerStepDensity(int iter) {
+    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
+
+    float* gridPtr = (float*)grid.data();
+    float* gridPtr_d = (float*)grid_d.data();
+
+    const auto b1 = std::pow(beta_1, iter + 1);
+    const auto b2 = std::pow(beta_2, iter + 1);
+    for (size_t i = 0; i < vecSize; i += sizeof(Cell) / sizeof(Cell::density))
+    {
+      auto g = gridPtr_d[i];
+      V[i] = beta_1 * V[i] + (1 - beta_1) * g;
+      auto Vh = V[i] / ((1) - b1);
+      S[i] = beta_2 * S[i] + (1 - beta_2) * g * g;
+      auto Sh = S[i] / ((1) - b2);
+      gridPtr[i] -= lr * Vh / (std::sqrt(Sh) + eps);
+    }
+  }
+
+  void optimizerStepSH(int iter) {
+    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
+
+    float* gridPtr = (float*)grid.data();
+    float* gridPtr_d = (float*)grid_d.data();
+
+    const auto b1 = std::pow(beta_1, iter + 1);
+    const auto b2 = std::pow(beta_2, iter + 1);
+    for (size_t i = 0; i < vecSize; i++)
+    {
+      if ((i % sizeof(Cell) / sizeof(Cell::density)) == 0)
+        continue;
+
+      auto g = gridPtr_d[i];
+      V[i] = beta_1 * V[i] + (1 - beta_1) * g;
+      auto Vh = V[i] / ((1) - b1);
+      S[i] = beta_2 * S[i] + (1 - beta_2) * g * g;
+      auto Sh = S[i] / ((1) - b2);
+      gridPtr[i] -= lr * Vh / (std::sqrt(Sh) + eps);
+    }
+  }
+
   void UpsampleGrid();
+  void UpsampleOctree();
+  void RebuildOctree();
 
   void LoadModel(std::string densities, std::string sh);
 
   void SetWorldViewMatrix(const float4x4& a_mat) {m_worldViewInv = inverse4x4(a_mat);}
   void SetWorldViewMProjatrix(const float4x4& a_mat) {m_worldViewProjInv = inverse4x4(a_mat);}
 
-  void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height);
-  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, RayMarcherExample* pImpl_d);
+  void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height, bool greyscale = false);
+  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, bool greyscale = false);
+  void kernel2D_TVGrad();
   void RayMarch(uint32_t* out_color [[size("width*height")]], uint32_t width, uint32_t height);  
 
   void CommitDeviceData() {}                                       // will be overriden in generated class
@@ -152,8 +228,11 @@ public:
   float    rayMarchTime;
 
   std::vector<Cell> grid;
-  std::vector<Cell> grid_grad;
+  std::vector<Cell> grid_d;
   size_t gridSize;
+
+  std::vector<OrthoTree::BoundingBox3D> boxes;
+  OrthoTree::OctreeBoxC octree;
 
   // std::vector<float> momentum; 
   // std::vector<float> m_GSquare;
@@ -166,5 +245,5 @@ public:
   BoundingBox bb;
 };
 
-void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d, const char* fileName);
+void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, const char* fileName, bool greyscale = false);
 // void L1LossGrad(float* loss, float* loss_d, uint* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d);

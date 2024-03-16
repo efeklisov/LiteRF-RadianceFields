@@ -4,7 +4,7 @@ project (simplerf)
 # get rid of annoying MSVC warnings.
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
-set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CXX_STANDARD 20)
 option(USE_VULKAN "Enable GPU implementation via Vulkan" OFF)
 
 option(USE_ENZYME "Enable Enzyme AD" OFF)
@@ -13,7 +13,7 @@ if(USE_ENZYME)
   set(CLANG_VERSION "17" CACHE STRING "clang and LLVM version to use")
   set(CMAKE_C_COMPILER   "/usr/bin/clang-${CLANG_VERSION}")   # $ export CC=/usr/bin/clang-17
   set(CMAKE_CXX_COMPILER "/usr/bin/clang++-${CLANG_VERSION}") # $ export CXX=/usr/bin/clang++-17
-  set(ENZYME_PLUGIN_DLL  "/home/egorf/LiteRF/enzyme/build/Enzyme/ClangEnzyme-${CLANG_VERSION}.so")
+  set(ENZYME_PLUGIN_DLL  "/home/egorf/LiteRF-RadianceFields/enzyme/build/Enzyme/ClangEnzyme-${CLANG_VERSION}.so")
   include_directories(${CMAKE_CURRENT_SOURCE_DIR})
   add_definitions(-DUSE_ENZYME)
 endif()
@@ -48,6 +48,7 @@ else()
   include_directories("external/LiteMath")
 endif()
 
+include_directories("./external/Octree")
 include_directories("./external/nlohmann")
 include_directories("./external")
 include_directories(".")
