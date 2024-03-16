@@ -161,7 +161,50 @@ public:
     }
   }
 
+
+  void optimizerStepDensity(int iter) {
+    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
+
+    float* gridPtr = (float*)grid.data();
+    float* gridPtr_d = (float*)grid_d.data();
+
+    const auto b1 = std::pow(beta_1, iter + 1);
+    const auto b2 = std::pow(beta_2, iter + 1);
+    for (size_t i = 0; i < vecSize; i += sizeof(Cell) / sizeof(Cell::density))
+    {
+      auto g = gridPtr_d[i];
+      V[i] = beta_1 * V[i] + (1 - beta_1) * g;
+      auto Vh = V[i] / ((1) - b1);
+      S[i] = beta_2 * S[i] + (1 - beta_2) * g * g;
+      auto Sh = S[i] / ((1) - b2);
+      gridPtr[i] -= lr * Vh / (std::sqrt(Sh) + eps);
+    }
+  }
+
+  void optimizerStepSH(int iter) {
+    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
+
+    float* gridPtr = (float*)grid.data();
+    float* gridPtr_d = (float*)grid_d.data();
+
+    const auto b1 = std::pow(beta_1, iter + 1);
+    const auto b2 = std::pow(beta_2, iter + 1);
+    for (size_t i = 0; i < vecSize; i++)
+    {
+      if ((i % sizeof(Cell) / sizeof(Cell::density)) == 0)
+        continue;
+
+      auto g = gridPtr_d[i];
+      V[i] = beta_1 * V[i] + (1 - beta_1) * g;
+      auto Vh = V[i] / ((1) - b1);
+      S[i] = beta_2 * S[i] + (1 - beta_2) * g * g;
+      auto Sh = S[i] / ((1) - b2);
+      gridPtr[i] -= lr * Vh / (std::sqrt(Sh) + eps);
+    }
+  }
+
   void UpsampleGrid();
+  void UpsampleOctree();
   void RebuildOctree();
 
   void LoadModel(std::string densities, std::string sh);
@@ -169,8 +212,8 @@ public:
   void SetWorldViewMatrix(const float4x4& a_mat) {m_worldViewInv = inverse4x4(a_mat);}
   void SetWorldViewMProjatrix(const float4x4& a_mat) {m_worldViewProjInv = inverse4x4(a_mat);}
 
-  void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height);
-  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res);
+  void kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height, bool greyscale = false);
+  void kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, bool greyscale = false);
   void kernel2D_TVGrad();
   void RayMarch(uint32_t* out_color [[size("width*height")]], uint32_t width, uint32_t height);  
 
@@ -202,5 +245,5 @@ public:
   BoundingBox bb;
 };
 
-void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, const char* fileName);
+void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, const char* fileName, bool greyscale = false);
 // void L1LossGrad(float* loss, float* loss_d, uint* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, RayMarcherExample* pImpl_d);

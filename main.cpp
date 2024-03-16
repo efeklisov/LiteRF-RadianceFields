@@ -17,7 +17,7 @@ using json = nlohmann::json;
 std::shared_ptr<RayMarcherExample> CreateRayMarcherExample_Generated(vk_utils::VulkanContext a_ctx, size_t a_maxThreadsGenerated); 
 #endif
 
-const size_t UPSAMPLE_LOOP = 5;
+const size_t UPSAMPLE_LOOP = 4;
 const size_t OUTER_LOOP = 15;
 const size_t IMAGE_LOOP = 7;
 
@@ -72,44 +72,42 @@ int main(int argc, const char** argv)
 
   for (int i = 0; i < UPSAMPLE_LOOP; i++) {
     for (int j = 0; j < OUTER_LOOP; j++) {
-        pImpl->SetWorldViewMProjatrix(perspectiveMatrix(45, 1, 0.1, 100));
+      pImpl->SetWorldViewMProjatrix(perspectiveMatrix(45, 1, 0.1, 100));
 
-        pImpl->UpdateMembersPlainData();                                            // copy all POD members from CPU to GPU in GPU implementation
+      pImpl->UpdateMembersPlainData();                                            // copy all POD members from CPU to GPU in GPU implementation
+    
+      float timings[4] = {0,0,0,0};
+      pImpl->GetExecutionTime("RayMarch", timings);
       
-        float timings[4] = {0,0,0,0};
-        pImpl->GetExecutionTime("RayMarch", timings);
+      pImpl->zeroGrad();
+      for (int k = 0; k < IMAGE_LOOP; k++) {
+        std::stringstream inputImgStrStream;
+        inputImgStrStream << "../data/r_" << k << ".png";
+        std::string inputImgStr = inputImgStrStream.str();
+
+        int WIDTH = WIN_WIDTH;
+        int HEIGHT = WIN_HEIGHT;
+        int CHANNELS = 4;
+
+        float* input_raw = stbi_loadf(inputImgStr.c_str(), &WIDTH, &HEIGHT, &CHANNELS, CHANNELS);
+        float4* input = (float4*)input_raw;
+
+        float4x4 viewMat =  lookAt(float3(0.0, 0.0, 1.3), float3(0.0, 0.0, 0.0), float3(0.0, 1.0, 0.0)) * rotate4x4Y(-float(360.0 / IMAGE_LOOP * k)*DEG_TO_RAD) * translate4x4(float3(-0.5, -0.5, -0.5));
+        pImpl->SetWorldViewMatrix(viewMat);
+
+        std::stringstream strOut;
+        strOut << std::fixed << std::setprecision(2) << "out_cpu_" << pImpl->gridSize << '_' << k << ".bmp";
+        std::string fileName = strOut.str();
+
+        float loss, loss_d;
+
+        L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), fileName.c_str());
         
-        pImpl->zeroGrad();
-        for (int k = 0; k < IMAGE_LOOP; k++) {
-          std::stringstream inputImgStrStream;
-          inputImgStrStream << "../data/r_" << k << ".png";
-          std::string inputImgStr = inputImgStrStream.str();
+        std::cout << loss << ' ' << loss_d << std::endl;
+        free(input);
+      }
 
-          int WIDTH = WIN_WIDTH;
-          int HEIGHT = WIN_HEIGHT;
-          int CHANNELS = 4;
-
-          float* input_raw = stbi_loadf(inputImgStr.c_str(), &WIDTH, &HEIGHT, &CHANNELS, CHANNELS);
-          float4* input = (float4*)input_raw;
-
-          float4x4 viewMat =  lookAt(float3(0.0, 0.0, 1.3), float3(0.0, 0.0, 0.0), float3(0.0, 1.0, 0.0)) * rotate4x4Y(-float(360.0 / 7 * k)*DEG_TO_RAD) * translate4x4(float3(-0.5, -0.5, -0.5));
-          pImpl->SetWorldViewMatrix(viewMat);
-
-          std::stringstream strOut;
-          strOut << std::fixed << std::setprecision(2) << "out_cpu_" << pImpl->gridSize << '_' << k << ".bmp";
-          std::string fileName = strOut.str();
-
-          float loss, loss_d;
-
-          // std::vector<float4> L(WIN_WIDTH * WIN_HEIGHT);
-          // pImpl->kernel2D_RayMarch(pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
-
-          // LiteImage::SaveBMP(fileName.c_str(), pixelData.data(), WIN_WIDTH, WIN_HEIGHT);
-          L1Loss(&loss, input, pixelData.data(), WIN_WIDTH, WIN_HEIGHT, pImpl.get(), fileName.c_str());
-          
-          std::cout << loss << ' ' << loss_d << std::endl;
-          free(input);
-        }
+        pImpl->kernel2D_TVGrad();
         pImpl->optimizerStep(j);
     }
 
@@ -118,10 +116,12 @@ int main(int argc, const char** argv)
       pImpl->UpsampleGrid();
       pImpl->InitGrad();
       pImpl->optimizerInit();
-      pImpl->RebuildOctree();
+      pImpl->UpsampleOctree();
       std::cout << "Upsample end" << std::endl;
     }
   }
+
+  std::cout << pImpl->boxes.size() << ' ' << ((pImpl->gridSize - 1) * (pImpl->gridSize - 1) * (pImpl->gridSize - 1)) << std::endl;
 
   // std::ofstream fout("model.dat", std::ios::out | std::ios::binary);
   // fout.write((char*)&pImpl->grid[0], pImpl->grid.size() * sizeof(Cell));

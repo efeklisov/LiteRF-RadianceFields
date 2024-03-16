@@ -113,13 +113,17 @@ float eval_sh(float* sh, float3 rayDir) {
   return sum;
 }
 
-float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* grid, size_t gridSize)
+float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* grid, size_t gridSize, float &transmittance, float &cauchy, bool greyscale = false)
 {
   float throughput = 1.0;
   float3 colour = float3(0.0);
 
+  cauchy = 0;
   float tPrev = -1;
   for (const size_t i : intersects) {
+    if (throughput < 0.1)
+      break;
+
     float3 bbMin = float3(boxes[i].Min[0], boxes[i].Min[1], boxes[i].Min[2]);
     float3 bbMax = float3(boxes[i].Max[0], boxes[i].Max[1], boxes[i].Max[2]);
 
@@ -155,49 +159,22 @@ float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step, const std:
     if (gridVal.density < 0.0)
       gridVal.density = 0.0;
 
+    cauchy += log(1 + 2 * gridVal.density * gridVal.density);
+
     float tr = exp(-gridVal.density * actualStep);
 
-    float3 RGB = float3(clamp(eval_sh(gridVal.sh_r, rayDir), 0.0f, 1.0f), clamp(eval_sh(gridVal.sh_g, rayDir), 0.0f, 1.0f), clamp(eval_sh(gridVal.sh_b, rayDir), 0.0f, 1.0f));
+    float3 RGB;
+    if (greyscale)
+      RGB = float3(1.0f);
+    else
+      RGB = float3(clamp(eval_sh(gridVal.sh_r, rayDir), 0.0f, 1.0f), clamp(eval_sh(gridVal.sh_g, rayDir), 0.0f, 1.0f), clamp(eval_sh(gridVal.sh_b, rayDir), 0.0f, 1.0f));
     colour = colour + throughput * (1 - tr) * RGB;
     
     throughput *= tr;
     tPrev = t;
   }
-
+  transmittance = throughput;
   return clamp(colour, 0.0, 1.0);
-}
-
-float OpacityLoss(float3 &rayPos, float3 &rayDir, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, size_t &gridSize) {
-  float ret = 0.0f;
-
-  for (const size_t i : intersects) {
-    float3 bbMin = float3(boxes[i].Min[0], boxes[i].Min[1], boxes[i].Min[2]);
-    float3 bbMax = float3(boxes[i].Max[0], boxes[i].Max[1], boxes[i].Max[2]);
-
-    float2 tNearAndFar = RayBoxIntersection(rayPos, rayDir, bbMin, bbMax);
-
-    float t = (tNearAndFar.x + tNearAndFar.y) / 2.0f;
-    float3 p = rayPos + t * rayDir;
-
-    float3 lerpFactors = (p - bbMin) / (bbMax - bbMin);
-
-    int3 nearCoords = clamp((int3)(bbMin * gridSize), 0, gridSize - 1);
-    int3 farCoords = clamp(nearCoords + 1, 0, gridSize - 1);
-
-    Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
-    Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
-    Cell xy01 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], gridSize)], lerpFactors.x);
-    Cell xy11 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], gridSize)], lerpFactors.x);
-
-    Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
-    Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
-
-    Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
-
-    ret += log(1.0f + 2.0f * gridVal.density * gridVal.density);
-  }
-
-  return 0.001 * ret;
 }
 
 float TVRegularisation(size_t &x, size_t &y, size_t &z, Cell* &grid, size_t &gridSize) {
@@ -222,7 +199,12 @@ float TVRegularisation(size_t &x, size_t &y, size_t &z, Cell* &grid, size_t &gri
     Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
     Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
 
-    return lerpCell(xyz0, xyz1, lerpFactors.z);
+    Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
+
+    if (gridVal.density < 0.0)
+      gridVal.density = 0.0;
+
+    return gridVal;
   };
 
   Cell voxel = getVoxel(x, y, z);
@@ -250,24 +232,18 @@ float TVRegularisationGrad(size_t &x, size_t &y, size_t &z, Cell* &grid, Cell* &
     enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize);
 }
 
-float OpacityLossGrad(float3 &rayPos, float3 &rayDir, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, Cell* &grid_d, size_t &gridSize) {
-  return __enzyme_autodiff((void*)OpacityLoss, 
-    enzyme_const, &rayPos, 
-    enzyme_const, &rayDir, enzyme_const, &intersects,
-    enzyme_const, &boxes, enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize);
+float RayGridLoss(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, size_t &gridSize, float &width, float &height, bool &greyscale) {
+  float transmittance, cauchy;
+  float3 color = RayGridIntersection(rayPos, rayDir, step, intersects, boxes, grid, gridSize, transmittance, cauchy, greyscale);
+
+  return abs(color[0] - ref[0]) + abs(color[1] - ref[1]) + abs(color[2] - ref[2]) + 0.0005f * cauchy + 0.0005f * (log(transmittance + 1e-3) + log(1 - transmittance + 1e-3));
 }
 
-float RayGridLoss(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, size_t &gridSize, float &width, float &height) {
-  float3 color = RayGridIntersection(rayPos, rayDir, step, intersects, boxes, grid, gridSize);
-
-  return abs(color[0] - ref[0]) + abs(color[1] - ref[1]) + abs(color[2] - ref[2]);
-}
-
-float RayGridLossGrad(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, Cell* &grid_d, size_t &gridSize, float &width, float &height) {
+float RayGridLossGrad(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, const std::vector<size_t>& intersects, const std::vector<OrthoTree::BoundingBox3D>& boxes, Cell* &grid, Cell* &grid_d, size_t &gridSize, float &width, float &height, bool &greyscale) {
   return __enzyme_autodiff((void*)RayGridLoss, 
     enzyme_const, &ref, enzyme_const, &rayPos, 
     enzyme_const, &rayDir, enzyme_const, &step, enzyme_const, &intersects, 
-    enzyme_const, &boxes, enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize, enzyme_const, &width, enzyme_const, &height);
+    enzyme_const, &boxes, enzyme_dup, &grid, &grid_d, enzyme_const, &gridSize, enzyme_const, &width, enzyme_const, &height, enzyme_const, &greyscale);
 }
 
 void RayMarcherExample::UpsampleGrid() {
@@ -297,42 +273,165 @@ void RayMarcherExample::UpsampleGrid() {
         Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
         Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
 
-        newGrid[indexGrid(x, y, z, gridSize)] = lerpCell(xyz0, xyz1, lerpFactors.z);
+        Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
+
+        if (gridVal.density < 0.0)
+          gridVal.density = 0.0;
+
+        newGrid[indexGrid(x, y, z, gridSize)] = gridVal;
       }
 
   grid = newGrid;
 }
 
+void RayMarcherExample::UpsampleOctree() {
+  std::cout << "Old octree size = " << boxes.size() << std::endl;
+  std::vector<OrthoTree::BoundingBox3D> newBoxes;
+  newBoxes.reserve((gridSize - 1) * (gridSize - 1) * (gridSize - 1));
+
+  auto getDensity = [this](OrthoTree::BoundingBox3D box) {
+    float3 bbMin = float3(box.Min[0], box.Min[1], box.Min[2]);
+    float3 bbMax = float3(box.Max[0], box.Max[1], box.Max[2]);
+
+    float3 p = (bbMin + bbMax) / 2.0f;
+
+    float3 lerpFactors = (p - bbMin) / (bbMax - bbMin);
+
+    int3 nearCoords = clamp((int3)(bbMin * gridSize), 0, gridSize - 1);
+    int3 farCoords = clamp(nearCoords + 1, 0, gridSize - 1);
+
+    Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
+    Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
+    Cell xy01 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], gridSize)], lerpFactors.x);
+    Cell xy11 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], gridSize)], lerpFactors.x);
+
+    Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
+    Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
+
+    Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
+    return gridVal.density;
+  };
+
+  for (auto box : boxes) {
+    double dims[3] = { (box.Max[0] - box.Min[0]) / 2.0f, (box.Max[1] - box.Min[1]) / 2.0f, (box.Max[2] - box.Min[2]) / 2.0f };
+    { 
+      auto newBox = box;
+      newBox.Max[0] -= dims[0];
+      newBox.Max[1] -= dims[1];
+      newBox.Max[2] -= dims[2];
+
+      if (getDensity(newBox) > 0.0)
+        newBoxes.push_back(newBox);
+    }
+
+    {
+      auto newBox = box;
+      newBox.Min[0] += dims[0];
+      newBox.Min[1] += dims[1];
+      newBox.Min[2] += dims[2];
+
+      if (getDensity(newBox) > 0.0)
+        newBoxes.push_back(newBox);    
+    }
+
+    {
+      auto newBox = box;
+      newBox.Min[0] += dims[0];
+      newBox.Max[1] -= dims[1];
+      newBox.Max[2] -= dims[2];
+
+      if (getDensity(newBox) > 0.0)
+        newBoxes.push_back(newBox);
+    }
+
+    {
+      auto newBox = box;
+      newBox.Max[0] -= dims[0];
+      newBox.Min[1] += dims[1];
+      newBox.Max[2] -= dims[2];
+
+      if (getDensity(newBox) > 0.0)
+        newBoxes.push_back(newBox);    
+    }
+
+    {
+      auto newBox = box;
+      newBox.Min[0] += dims[0];
+      newBox.Min[1] += dims[1];
+      newBox.Max[2] -= dims[2];
+
+      if (getDensity(newBox) > 0.0)
+        newBoxes.push_back(newBox);    
+    }
+
+    {
+      auto newBox = box;
+      newBox.Max[0] -= dims[0];
+      newBox.Max[1] -= dims[1];
+      newBox.Min[2] += dims[2];
+
+      if (getDensity(newBox) > 0.0)
+        newBoxes.push_back(newBox);    
+    }
+
+    {
+      auto newBox = box;
+      newBox.Min[0] += dims[0];
+      newBox.Max[1] -= dims[1];
+      newBox.Min[2] += dims[2];
+
+      if (getDensity(newBox) > 0.0)
+        newBoxes.push_back(newBox);    
+    }
+
+    {
+      auto newBox = box;
+      newBox.Max[0] -= dims[0];
+      newBox.Min[1] += dims[1];
+      newBox.Min[2] += dims[2];
+
+      if (getDensity(newBox) > 0.0)
+        newBoxes.push_back(newBox);    
+    }
+
+  }
+
+  boxes = newBoxes;
+  octree = OrthoTree::OctreeBoxC::Create(boxes);
+  std::cout << "New octree size = " << boxes.size() << std::endl;
+}
 
 void RayMarcherExample::RebuildOctree() {
   std::cout << "Old octree size = " << boxes.size() << std::endl;
+  auto oldBoxes = boxes;
+
   boxes.clear();
   boxes.reserve((gridSize - 1) * (gridSize - 1) * (gridSize - 1));
 
-  for (size_t z = 0; z < gridSize - 1; z++)
-    for (size_t y = 0; y < gridSize - 1; y++)
-      for (size_t x = 0; x < gridSize - 1; x++) {
-        float3 coords = (float3(0.0f) + (float3(x, y, z) + 0.5f)) / gridSize;
+  for (auto box : oldBoxes) {
+    float3 bbMin = float3(box.Min[0], box.Min[1], box.Min[2]);
+    float3 bbMax = float3(box.Max[0], box.Max[1], box.Max[2]);
 
-        int3 nearCoords = clamp((int3)coords, int3(0), int3(gridSize - 1));
-        int3 farCoords = clamp((int3)coords + int3(1), int3(0), int3(gridSize - 1));
+    float3 p = (bbMin + bbMax) / 2.0f;
 
-        float3 lerpFactors = coords - (float3)nearCoords;
+    float3 lerpFactors = (p - bbMin) / (bbMax - bbMin);
 
-        Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
-        Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
-        Cell xy01 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], gridSize)], lerpFactors.x);
-        Cell xy11 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], gridSize)], lerpFactors.x);
+    int3 nearCoords = clamp((int3)(bbMin * gridSize), 0, gridSize - 1);
+    int3 farCoords = clamp(nearCoords + 1, 0, gridSize - 1);
 
-        Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
-        Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
+    Cell xy00 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
+    Cell xy10 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], nearCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], nearCoords[2], gridSize)], lerpFactors.x);
+    Cell xy01 = lerpCell(grid[indexGrid(nearCoords[0], nearCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], nearCoords[1], farCoords[2], gridSize)], lerpFactors.x);
+    Cell xy11 = lerpCell(grid[indexGrid(nearCoords[0], farCoords[1], farCoords[2], gridSize)], grid[indexGrid(farCoords[0], farCoords[1], farCoords[2], gridSize)], lerpFactors.x);
 
-        Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
+    Cell xyz0 = lerpCell(xy00, xy10, lerpFactors.y);
+    Cell xyz1 = lerpCell(xy01, xy11, lerpFactors.y);
 
-        // if (gridVal.density > 0.01)
-          boxes.push_back(OrthoTree::BoundingBox3D {{(float) x / (float) gridSize, (float) y / (float) gridSize, (float) z / (float) gridSize}, 
-              {(float) (x + 1) / (float) gridSize, (float) (y + 1) / (float) gridSize, (float) (z + 1) / (float) gridSize}});
-      }
+    Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
+
+    if (gridVal.density > 0.0)
+      boxes.push_back(box);
+  }
 
   octree = OrthoTree::OctreeBoxC::Create(boxes);
   std::cout << "New octree size = " << boxes.size() << std::endl;
@@ -450,29 +549,28 @@ static inline float4 Uint32ToRealColor(uint color) {
 //   __enzyme_autodiff(L1Loss, enzyme_dup, loss, loss_d, enzyme_const, ref, enzyme_const, gen, enzyme_const, width, enzyme_const, height, enzyme_dup, pImpl, pImpl_d);
 // }
 
-void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, const char* fileName) {
+void L1Loss(float* loss, float4* ref, uint* gen, int width, int height, RayMarcherExample* pImpl, const char* fileName, bool greyscale) {
   *loss = 0.0f;
 
   std::cout << "Running learning kernel start" << std::endl;
-  pImpl->kernel2D_RayMarchGrad(width, height, ref);  
-  pImpl->kernel2D_TVGrad();
+  pImpl->kernel2D_RayMarchGrad(width, height, ref, greyscale);  
   std::cout << "Running learning kernel end" << std::endl;
 
-  pImpl->kernel2D_RayMarch(gen, width, height);
+  pImpl->kernel2D_RayMarch(gen, width, height, greyscale);
 
   LiteImage::SaveBMP(fileName, gen, width, height);
 
-  #pragma omp parallel for
-  for (int y = 0; y < height; y++)
-    for (int x = 0; x < width; x++) {
-      float4 ref_pixel = ref[y * width + x];
-      float4 gen_pixel = Uint32ToRealColor(gen[y * width + x]);
+  // #pragma omp parallel for
+  // for (int y = 0; y < height; y++)
+  //   for (int x = 0; x < width; x++) {
+  //     float4 ref_pixel = ref[y * width + x];
+  //     float4 gen_pixel = Uint32ToRealColor(gen[y * width + x]);
 
-      *loss += abs(ref_pixel[0] - gen_pixel[0]) + abs(ref_pixel[1] - gen_pixel[1]) + abs(ref_pixel[2] - gen_pixel[2]);
-    }
+  //     *loss += abs(ref_pixel[0] - gen_pixel[0]) + abs(ref_pixel[1] - gen_pixel[1]) + abs(ref_pixel[2] - gen_pixel[2]);
+  //   }
 }
 
-void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height) 
+void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, uint32_t height, bool greyscale) 
 {
   #pragma omp parallel for
   for(uint32_t y=0;y<height;y++) 
@@ -491,7 +589,8 @@ void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, u
       //if (RaySphereIntersection(rayPos, rayDir, 0.05))
       {
         float step = (bb.max[0] - bb.min[0]) / (gridSize);
-        float3 color = RayGridIntersection(rayPos, rayDir, step, intersects, boxes, grid.data(), gridSize);
+        float transmittance, cauchy;
+        float3 color = RayGridIntersection(rayPos, rayDir, step, intersects, boxes, grid.data(), gridSize, transmittance, cauchy, greyscale);
         resColor = float4(color[0], color[1], color[2], 1.0f);
 
         // float alpha = 1.0f;
@@ -504,7 +603,7 @@ void RayMarcherExample::kernel2D_RayMarch(uint32_t* out_color, uint32_t width, u
   }
 }
 
-void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res) 
+void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, float4* res, bool greyscale) 
 {
   #pragma omp parallel for
   for(uint32_t y=0;y<height;y++) 
@@ -529,7 +628,14 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
 
         double step = (bb.max[0] - bb.min[0]) / (gridSize);
 
-        float4 res_pixel = res[y*width+x];
+        float4 res_pixel_color = res[y*width+x];
+        float4 res_pixel;
+        if (greyscale) {
+          res_pixel[0] = 0.11f * res_pixel_color[2] + 0.59f * res_pixel_color[1] + 0.3f * res_pixel_color[0];
+          res_pixel[1] = 0.11f * res_pixel_color[2] + 0.59f * res_pixel_color[1] + 0.3f * res_pixel_color[0];
+          res_pixel[2] = 0.11f * res_pixel_color[2] + 0.59f * res_pixel_color[1] + 0.3f * res_pixel_color[0];
+        } else
+          res_pixel = res_pixel_color;
 
         Cell* grid_data = grid.data();
         Cell* grid_in_data = grid_d.data();
@@ -537,8 +643,7 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
         float fwidth = width;
         float fheight = height;
 
-        float dL1 = RayGridLossGrad(res_pixel, rayPos, rayDir, step, intersects, boxes, grid_data, grid_in_data, gridSize, fwidth, fheight);
-        float dOpacity = OpacityLossGrad(rayPos, rayDir, intersects, boxes, grid_data, grid_in_data, gridSize);
+        float dL1 = RayGridLossGrad(res_pixel, rayPos, rayDir, step, intersects, boxes, grid_data, grid_in_data, gridSize, fwidth, fheight, greyscale);
       }
     }
   }
