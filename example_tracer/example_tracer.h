@@ -25,10 +25,11 @@ const float C2[5] = {
 struct Cell
 {
   float density;
-  float sh_r[SH_WIDTH];
-  float sh_g[SH_WIDTH];
-  float sh_b[SH_WIDTH];
+  float RGB[3];
+  float sh[SH_WIDTH];
 };
+
+const size_t CellSize = sizeof(Cell) / sizeof(Cell::density);
 
 struct BoundingBox
 {
@@ -62,12 +63,8 @@ public:
           size_t i = x + y * gridSize + z * gridSize * gridSize;
 
           grid[i].density = 0.01;
-          for (size_t j = 0; j < SH_WIDTH; j++)
-          {
-            grid[i].sh_r[j] = 0.1;
-            grid[i].sh_g[j] = 0.1;
-            grid[i].sh_b[j] = 0.1;
-          }
+          for (size_t j = 1; j < CellSize; j++)
+            ((float*)&grid[i])[j] = 0.1;
         }
 
     boxes.resize((gridSize - 1) * (gridSize - 1) * (gridSize - 1));
@@ -107,25 +104,13 @@ public:
   void zeroGrad()
   {
 #pragma omp parallel for
-    for (int z = 0; z < gridSize; z++)
-      for (int y = 0; y < gridSize; y++)
-        for (int x = 0; x < gridSize; x++)
-        {
-          Cell *cell = &grid_d[z * gridSize * gridSize + y * gridSize + x];
-          cell->density = 0.0f;
-
-          for (int i = 0; i < SH_WIDTH; i++)
-          {
-            cell->sh_r[i] = 0.0f;
-            cell->sh_g[i] = 0.0f;
-            cell->sh_b[i] = 0.0f;
-          }
-        }
+    for (size_t i = 0; i < (grid_d.size() * CellSize); i++)
+      ((float*)grid_d.data())[i] = 0.0f;
   }
 
   void optimizerInit()
   {
-    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
+    const size_t vecSize = gridSize * gridSize * gridSize * CellSize;
 
     // momentum.resize(vecSize);
     // m_GSquare.resize(vecSize);
@@ -142,7 +127,7 @@ public:
 
   void optimizerStep(int iter)
   {
-    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
+    const size_t vecSize = gridSize * gridSize * gridSize * CellSize;
 
     float *gridPtr = (float *)grid.data();
     float *gridPtr_d = (float *)grid_d.data();
@@ -179,14 +164,14 @@ public:
 
   void optimizerStepDensity(int iter)
   {
-    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
+    const size_t vecSize = gridSize * gridSize * gridSize * CellSize;
 
     float *gridPtr = (float *)grid.data();
     float *gridPtr_d = (float *)grid_d.data();
 
     const auto b1 = std::pow(beta_1, iter + 1);
     const auto b2 = std::pow(beta_2, iter + 1);
-    for (size_t i = 0; i < vecSize; i += sizeof(Cell) / sizeof(Cell::density))
+    for (size_t i = 0; i < vecSize; i += CellSize)
     {
       auto g = gridPtr_d[i];
       V[i] = beta_1 * V[i] + (1 - beta_1) * g;
@@ -199,7 +184,7 @@ public:
 
   void optimizerStepSH(int iter)
   {
-    const size_t vecSize = gridSize * gridSize * gridSize * sizeof(Cell) / sizeof(Cell::density);
+    const size_t vecSize = gridSize * gridSize * gridSize * CellSize;
 
     float *gridPtr = (float *)grid.data();
     float *gridPtr_d = (float *)grid_d.data();
@@ -208,7 +193,7 @@ public:
     const auto b2 = std::pow(beta_2, iter + 1);
     for (size_t i = 0; i < vecSize; i++)
     {
-      if ((i % sizeof(Cell) / sizeof(Cell::density)) == 0)
+      if ((i % CellSize) == 0)
         continue;
 
       auto g = gridPtr_d[i];

@@ -71,14 +71,11 @@ float sigmoid(float x)
 
 inline Cell lerpCell(const Cell v0, const Cell v1, const float t)
 {
-  Cell ret;
-  ret.density = LiteMath::lerp(v0.density, v1.density, t);
-  for (size_t i = 0; i < SH_WIDTH; i++)
-  {
-    ret.sh_r[i] = LiteMath::lerp(v0.sh_r[i], v1.sh_r[i], t);
-    ret.sh_g[i] = LiteMath::lerp(v0.sh_g[i], v1.sh_g[i], t);
-    ret.sh_b[i] = LiteMath::lerp(v0.sh_b[i], v1.sh_b[i], t);
-  }
+  Cell ret = {};
+
+  for (size_t i = 0; i < CellSize; i++)
+    ((float*)&ret)[i] = LiteMath::lerp(((float*)&v0)[i], ((float*)&v1)[i], t);
+
   return ret;
 }
 
@@ -180,10 +177,13 @@ float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step,
     float3 RGB;
     if (greyscale)
       RGB = float3(1.0f);
-    else
-      RGB = float3(clamp(eval_sh(gridVal.sh_r, rayDir), 0.0f, 1.0f),
-        clamp(eval_sh(gridVal.sh_g, rayDir), 0.0f, 1.0f),
-        clamp(eval_sh(gridVal.sh_b, rayDir), 0.0f, 1.0f));
+    else {
+      float sh = clamp(eval_sh(gridVal.sh, rayDir), 0.0f, 1.0f);
+      RGB = float3(clamp(gridVal.RGB[0] * sh, 0.0f, 1.0f),
+        clamp(gridVal.RGB[1] * sh, 0.0f, 1.0f),
+        clamp(gridVal.RGB[2] * sh, 0.0f, 1.0f));
+    }
+      
     colour = colour + throughput * (1 - tr) * RGB;
 
     throughput *= tr;
@@ -238,20 +238,11 @@ float TVRegularisation(size_t &x, size_t &y, size_t &z, Cell *&grid, size_t &gri
     (voxel.density - voxelY.density) * (voxel.density - voxelY.density) +
     (voxel.density - voxelZ.density) * (voxel.density - voxelZ.density));
 
-  for (size_t i = 0; i < SH_WIDTH; i++)
-    ret += lambda_SH * sqrt((voxel.sh_r[i] - voxelX.sh_r[i]) * (voxel.sh_r[i] - voxelX.sh_r[i]) +
-      (voxel.sh_r[i] - voxelY.sh_r[i]) * (voxel.sh_r[i] - voxelY.sh_r[i]) +
-      (voxel.sh_r[i] - voxelZ.sh_r[i]) * (voxel.sh_r[i] - voxelZ.sh_r[i]));
-
-  for (size_t i = 0; i < SH_WIDTH; i++)
-    ret += lambda_SH * sqrt((voxel.sh_g[i] - voxelX.sh_g[i]) * (voxel.sh_g[i] - voxelX.sh_g[i]) +
-      (voxel.sh_g[i] - voxelY.sh_g[i]) * (voxel.sh_g[i] - voxelY.sh_g[i]) +
-      (voxel.sh_g[i] - voxelZ.sh_g[i]) * (voxel.sh_g[i] - voxelZ.sh_g[i]));
-
-  for (size_t i = 0; i < SH_WIDTH; i++)
-    ret += lambda_SH * sqrt((voxel.sh_b[i] - voxelX.sh_b[i]) * (voxel.sh_b[i] - voxelX.sh_b[i]) +
-      (voxel.sh_b[i] - voxelY.sh_b[i]) * (voxel.sh_b[i] - voxelY.sh_b[i]) +
-      (voxel.sh_b[i] - voxelZ.sh_b[i]) * (voxel.sh_b[i] - voxelZ.sh_b[i]));
+  for (size_t j = offsetof(Cell, sh) / sizeof(Cell::density); j < CellSize; j++)
+    ((float*)&ret)[j] = lambda_SH * sqrt(
+      (((float*)&voxel)[j] - ((float*)&voxelX)[j]) * (((float*)&voxel)[j] - ((float*)&voxelX)[j]) +
+      (((float*)&voxel)[j] - ((float*)&voxelY)[j]) * (((float*)&voxel)[j] - ((float*)&voxelY)[j]) +
+      (((float*)&voxel)[j] - ((float*)&voxelZ)[j]) * (((float*)&voxel)[j] - ((float*)&voxelZ)[j]));
 
   return ret;
 }
@@ -273,7 +264,7 @@ float RayGridLoss(float4 &ref, float3 &rayPos, float3 &rayDir, double &step,
     transmittance, cauchy, greyscale);
 
   return abs(color[0] - ref[0]) + abs(color[1] - ref[1]) + abs(color[2] - ref[2]) +
-    0.0005f * cauchy + 0.0005f * (log(transmittance + 1e-3) + log(1 - transmittance + 1e-3));
+    0.0005f * cauchy + 0.0001f * (log(transmittance + 1e-3) + log(1 - transmittance + 1e-3));
 }
 
 float RayGridLossGrad(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, 
@@ -497,56 +488,56 @@ void RayMarcherExample::RebuildOctree()
   std::cout << "New octree size = " << boxes.size() << std::endl;
 }
 
-void RayMarcherExample::LoadModel(std::string densities, std::string sh)
-{
-  std::cout << "Loading model\n";
-  {
-    json densities_data;
-    {
-      std::ifstream f(densities);
-      densities_data = json::parse(f);
-    }
+// void RayMarcherExample::LoadModel(std::string densities, std::string sh)
+// {
+//   std::cout << "Loading model\n";
+//   {
+//     json densities_data;
+//     {
+//       std::ifstream f(densities);
+//       densities_data = json::parse(f);
+//     }
 
-    std::cout << "Loaded densities from disk\n";
+//     std::cout << "Loaded densities from disk\n";
 
-    for (size_t z = 0; z < gridSize; z++)
-      for (size_t y = 0; y < gridSize; y++)
-        for (size_t x = 0; x < gridSize; x++)
-        {
-          size_t gridIndex = indexGrid(x, y, z, gridSize);
-          grid[gridIndex].density = densities_data[z][y][x][0];
-        }
+//     for (size_t z = 0; z < gridSize; z++)
+//       for (size_t y = 0; y < gridSize; y++)
+//         for (size_t x = 0; x < gridSize; x++)
+//         {
+//           size_t gridIndex = indexGrid(x, y, z, gridSize);
+//           grid[gridIndex].density = densities_data[z][y][x][0];
+//         }
 
-    std::cout << "Assigned densities\n";
-  }
+//     std::cout << "Assigned densities\n";
+//   }
 
-  {
-    json sh_data;
-    {
-      std::ifstream f(sh);
-      sh_data = json::parse(f);
-    }
+//   {
+//     json sh_data;
+//     {
+//       std::ifstream f(sh);
+//       sh_data = json::parse(f);
+//     }
 
-    std::cout << "Loaded SH coefficients from disk\n";
+//     std::cout << "Loaded SH coefficients from disk\n";
 
-    for (size_t z = 0; z < gridSize; z++)
-      for (size_t y = 0; y < gridSize; y++)
-        for (size_t x = 0; x < gridSize; x++)
-        {
-          size_t gridIndex = indexGrid(x, y, z, gridSize);
+//     for (size_t z = 0; z < gridSize; z++)
+//       for (size_t y = 0; y < gridSize; y++)
+//         for (size_t x = 0; x < gridSize; x++)
+//         {
+//           size_t gridIndex = indexGrid(x, y, z, gridSize);
 
-          for (size_t i = 0; i < SH_WIDTH; i++)
-          {
-            grid[gridIndex].sh_r[i] = sh_data[z][y][x][i * 3];
-            grid[gridIndex].sh_g[i] = sh_data[z][y][x][1 + i * 3];
-            grid[gridIndex].sh_b[i] = sh_data[z][y][x][2 + i * 3];
-          }
-        }
+//           for (size_t i = 0; i < SH_WIDTH; i++)
+//           {
+//             grid[gridIndex].sh_r[i] = sh_data[z][y][x][i * 3];
+//             grid[gridIndex].sh_g[i] = sh_data[z][y][x][1 + i * 3];
+//             grid[gridIndex].sh_b[i] = sh_data[z][y][x][2 + i * 3];
+//           }
+//         }
 
-    std::cout << "Assigned SH coefficients\n";
-  }
-  std::cout << "Done loading\n";
-}
+//     std::cout << "Assigned SH coefficients\n";
+//   }
+//   std::cout << "Done loading\n";
+// }
 
 static inline float3 EyeRayDir(float x, float y, float4x4 a_mViewProjInv)
 {
@@ -732,15 +723,11 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
   {
     Cell currCell = grid_d[i];
 
-    avgVal += currCell.density;
-    avgVal += currCell.sh_r[0];
-    avgVal += currCell.sh_g[0];
-    avgVal += currCell.sh_b[0];
+    for (size_t j = 0; j < CellSize; j++)
+      avgVal += ((float*)&currCell)[j];
 
-    maxVal = std::max(maxVal, currCell.density);
-    maxVal = std::max(maxVal, currCell.sh_r[0]);
-    maxVal = std::max(maxVal, currCell.sh_g[0]);
-    maxVal = std::max(maxVal, currCell.sh_b[0]);
+    for (size_t j = 0; j < CellSize; j++)
+      maxVal += std::max(maxVal, ((float*)&currCell)[j]);
   }
 
   std::cout << "avgVal = " << avgVal / float(gridSize) << std::endl;
