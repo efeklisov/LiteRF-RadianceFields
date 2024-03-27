@@ -125,6 +125,23 @@ public:
     S = std::vector<float>(vecSize, 0);
   }
 
+  void optimizerUpsample()
+  {
+    const size_t vecSize = gridSize * gridSize * gridSize * CellSize;
+
+    std::vector<float> newV, newS;
+    newV.resize(vecSize);
+    newS.resize(vecSize);
+
+    for (size_t i = 0; i < vecSize; i += vecSize) {
+      newV[i] = V[i / 8];
+      newS[i] = S[i / 8];
+    }
+
+    V = newV;
+    S = newS;
+  }
+
   void optimizerStep(int iter)
   {
     const size_t vecSize = gridSize * gridSize * gridSize * CellSize;

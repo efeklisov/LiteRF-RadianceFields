@@ -80,6 +80,21 @@ inline Cell lerpCell(const Cell v0, const Cell v1, const float t)
 }
 
 // From Mitsuba 3
+void sh_eval_1(const float3 &d, float *out) 
+{
+    float x = d.x, y = d.y, z = d.z;
+    float c0, s0, tmp_a;
+
+    out[0] = 0.28209479177387814;
+    out[2] = z * 0.488602511902919923;
+    c0 = x;
+    s0 = y;
+
+    tmp_a = -0.488602511902919978;
+    out[3] = tmp_a * c0;
+    out[1] = tmp_a * s0;
+}
+
 void sh_eval_2(const float3 &d, float *out)
 {
   float x = d.x, y = d.y, z = d.z, z2 = z * z;
@@ -105,16 +120,64 @@ void sh_eval_2(const float3 &d, float *out)
   out[4] = tmp_c * s1;
 }
 
+void sh_eval_3(const float3 &d, float *out)
+{
+    float x = d.x, y = d.y, z = d.z, z2 = z * z;
+    float c0, c1, s0, s1, tmp_a, tmp_b, tmp_c;
+
+    out[0] = 0.28209479177387814;
+    out[2] = z * 0.488602511902919923;
+    out[6] = z2 * 0.94617469575756008 + -0.315391565252520045;
+    out[12] = z * z2 * 1.865881662950577 + -1.1195289977703462;
+    c0 = x;
+    s0 = y;
+
+    tmp_a = -0.488602511902919978;
+    out[3] = tmp_a * c0;
+    out[1] = tmp_a * s0;
+    tmp_b = z * -1.09254843059207896;
+    out[7] = tmp_b * c0;
+    out[5] = tmp_b * s0;
+    tmp_c = z2 * -2.28522899732232876 + 0.457045799464465774;
+    out[13] = tmp_c * c0;
+    out[11] = tmp_c * s0;
+    c1 = x * c0 - y * s0;
+    s1 = x * s0 + y * c0;
+
+    tmp_a = 0.546274215296039478;
+    out[8] = tmp_a * c1;
+    out[4] = tmp_a * s1;
+    tmp_b = z * 1.44530572132027735;
+    out[14] = tmp_b * c1;
+    out[10] = tmp_b * s1;
+    c0 = x * c1 - y * s1;
+    s0 = x * s1 + y * c1;
+
+    tmp_c = -0.590043589926643519;
+    out[15] = tmp_c * c0;
+    out[9] = tmp_c * s0;
+}
+
 float eval_sh(float *sh, float3 rayDir)
 {
   float sh_coeffs[SH_WIDTH];
   sh_eval_2(rayDir, sh_coeffs);
 
   float sum = 0.0f;
-  for (int i = 0; i < SH_WIDTH; i++)
+  for (int i = 0; i < SH_WIDTH; i++) // Attention! Huge crutch
     sum += sh[i] * sh_coeffs[i];
 
   return sum;
+}
+
+float ReLU(float x)
+{
+  return max(0.0f, x);
+}
+
+float LeakyReLU(float x, float negative_slope = 0.01)
+{
+  return max(0.0f, x) + negative_slope * min(0.0f, x);
 }
 
 float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step, 
@@ -167,8 +230,7 @@ float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step,
     Cell gridVal = lerpCell(xyz0, xyz1, lerpFactors.z);
 
     // relu
-    if (gridVal.density < 0.0)
-      gridVal.density = 0.0;
+    gridVal.density = ReLU(gridVal.density);
 
     cauchy += log(1 + 2 * gridVal.density * gridVal.density);
 
@@ -178,10 +240,8 @@ float3 RayGridIntersection(float3 rayPos, float3 rayDir, double step,
     if (greyscale)
       RGB = float3(1.0f);
     else {
-      float sh = clamp(eval_sh(gridVal.sh, rayDir), 0.0f, 1.0f);
-      RGB = float3(clamp(gridVal.RGB[0] * sh, 0.0f, 1.0f),
-        clamp(gridVal.RGB[1] * sh, 0.0f, 1.0f),
-        clamp(gridVal.RGB[2] * sh, 0.0f, 1.0f));
+      float sh = sigmoid(eval_sh(gridVal.sh, rayDir));
+      RGB = float3(gridVal.RGB[0] * sh, gridVal.RGB[1] * sh, gridVal.RGB[2] * sh);
     }
       
     colour = colour + throughput * (1 - tr) * RGB;
@@ -264,7 +324,7 @@ float RayGridLoss(float4 &ref, float3 &rayPos, float3 &rayDir, double &step,
     transmittance, cauchy, greyscale);
 
   return abs(color[0] - ref[0]) + abs(color[1] - ref[1]) + abs(color[2] - ref[2]) +
-    0.0005f * cauchy + 0.0001f * (log(transmittance + 1e-3) + log(1 - transmittance + 1e-3));
+    0.0000f * cauchy + 0.0000f * (log(transmittance + 1e-3) + log(1 - transmittance + 1e-3));
 }
 
 float RayGridLossGrad(float4 &ref, float3 &rayPos, float3 &rayDir, double &step, 
@@ -444,6 +504,26 @@ void RayMarcherExample::UpsampleOctree()
   boxes = newBoxes;
   octree = OrthoTree::OctreeBoxC::Create(boxes);
   std::cout << "New octree size = " << boxes.size() << std::endl;
+
+//   std::vector<OrthoTree::BoundingBox3D> newBoxes;
+//   newBoxes.resize((gridSize - 1) * (gridSize - 1) * (gridSize - 1));
+
+// #pragma omp parallel for
+//   for (size_t z = 0; z < gridSize - 1; z++)
+//     for (size_t y = 0; y < gridSize - 1; y++)
+//       for (size_t x = 0; x < gridSize - 1; x++)
+//       {
+//         size_t i = x + y * (gridSize - 1) + z * (gridSize - 1) * (gridSize - 1);
+
+//         newBoxes[i] = OrthoTree::BoundingBox3D{
+//           {(float)x / (float)gridSize, (float)y / (float)gridSize, (float)z / (float)gridSize},
+//           {(float)(x + 1) / (float)gridSize, (float)(y + 1) / (float)gridSize, 
+//             (float)(z + 1) / (float)gridSize}
+//         };
+//       }
+
+//   boxes = newBoxes;
+//   octree = OrthoTree::OctreeBoxC::Create(boxes);
 }
 
 void RayMarcherExample::RebuildOctree()
@@ -703,7 +783,7 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
             0.3f * res_pixel_color[0];
         }
         else
-          res_pixel = res_pixel_color;
+          res_pixel = float4(res_pixel_color[0], res_pixel_color[1], res_pixel_color[2], 0.0f);
 
         Cell *grid_data = grid.data();
         Cell *grid_in_data = grid_d.data();
@@ -727,7 +807,7 @@ void RayMarcherExample::kernel2D_RayMarchGrad(uint32_t width, uint32_t height, f
       avgVal += ((float*)&currCell)[j];
 
     for (size_t j = 0; j < CellSize; j++)
-      maxVal += std::max(maxVal, ((float*)&currCell)[j]);
+      maxVal = std::max(maxVal, ((float*)&currCell)[j]);
   }
 
   std::cout << "avgVal = " << avgVal / float(gridSize) << std::endl;

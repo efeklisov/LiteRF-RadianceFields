@@ -19,8 +19,8 @@ std::shared_ptr<RayMarcherExample> CreateRayMarcherExample_Generated(vk_utils::V
 #endif
 
 const size_t UPSAMPLE_LOOP = 4;
-const size_t OUTER_LOOP = 15;
-const size_t IMAGE_LOOP = 7;
+const size_t OUTER_LOOP = 1;
+const size_t IMAGE_LOOP = 100;
 
 int main(int argc, const char **argv)
 {
@@ -60,22 +60,23 @@ int main(int argc, const char **argv)
 
   json cam_data;
   {
-    std::ifstream f("../data/radiance_fields/lego/train_camera_params.json");
+    std::ifstream f("../data/nerf_synthetic/lego/transforms_train.json");
     cam_data = json::parse(f);
   }
 
-  const int WIN_WIDTH = 256;
-  const int WIN_HEIGHT = 256;
+  const int WIN_WIDTH = 800;
+  const int WIN_HEIGHT = 800;
 
   std::vector<uint> pixelData(WIN_WIDTH * WIN_HEIGHT);
 
   stbi_set_flip_vertically_on_load(true);
 
+  size_t step = 0;
   for (int i = 0; i < UPSAMPLE_LOOP; i++)
   {
     for (int j = 0; j < OUTER_LOOP; j++)
     {
-      pImpl->SetWorldViewMProjatrix(perspectiveMatrix(45, 1, 0.1, 100));
+      pImpl->SetWorldViewMProjatrix(perspectiveMatrix((float)cam_data["camera_angle_x"] * 180.0f / M_PIf32, 1, 0.1, 100));
 
       pImpl->UpdateMembersPlainData(); // copy all POD members from CPU to GPU in GPU implementation
 
@@ -83,10 +84,12 @@ int main(int argc, const char **argv)
       pImpl->GetExecutionTime("RayMarch", timings);
 
       pImpl->zeroGrad();
-      for (int k = 0; k < IMAGE_LOOP; k++)
+
+      size_t k = 0;
+      for (auto cam : cam_data["frames"])
       {
         std::stringstream inputImgStrStream;
-        inputImgStrStream << "../data/r_" << k << ".png";
+        inputImgStrStream << "../data/nerf_synthetic/lego/train/r_" << k << ".png";
         std::string inputImgStr = inputImgStrStream.str();
 
         int WIDTH = WIN_WIDTH;
@@ -96,16 +99,32 @@ int main(int argc, const char **argv)
         float *input_raw = stbi_loadf(inputImgStr.c_str(), &WIDTH, &HEIGHT, &CHANNELS, CHANNELS);
         float4 *input = (float4 *)input_raw;
 
-        float4x4 viewMat = 
-          lookAt(float3(0.0, 0.0, 1.3), float3(0.0, 0.0, 0.0), float3(0.0, 1.0, 0.0)) * 
-          rotate4x4Y(-float(360.0 / IMAGE_LOOP * k) * DEG_TO_RAD) * 
-          translate4x4(float3(-0.5, -0.5, -0.5));
+        float4x4 viewMat = {};
+        viewMat[0][0] = cam["transform_matrix"][0][0];
+        viewMat[0][1] = cam["transform_matrix"][1][0];
+        viewMat[0][2] = cam["transform_matrix"][2][0];
+        viewMat[0][3] = cam["transform_matrix"][3][0];
 
-        pImpl->SetWorldViewMatrix(viewMat);
+        viewMat[1][0] = cam["transform_matrix"][0][1];
+        viewMat[1][1] = cam["transform_matrix"][1][1];
+        viewMat[1][2] = cam["transform_matrix"][2][1];
+        viewMat[1][3] = cam["transform_matrix"][3][1];
+
+        viewMat[2][0] = cam["transform_matrix"][0][2];
+        viewMat[2][1] = cam["transform_matrix"][1][2];
+        viewMat[2][2] = cam["transform_matrix"][2][2];
+        viewMat[2][3] = cam["transform_matrix"][3][2];
+        
+        viewMat[3][0] = (float) cam["transform_matrix"][0][3] * 0.33f + 0.5f;
+        viewMat[3][1] = (float) cam["transform_matrix"][1][3] * 0.33f + 0.5f;
+        viewMat[3][2] = (float) cam["transform_matrix"][2][3] * 0.33f + 0.5f;
+        viewMat[3][3] = (float) cam["transform_matrix"][3][3] * 0.33f + 0.5f;
+
+        pImpl->SetWorldViewMatrix(inverse4x4(transpose(viewMat)));
 
         std::stringstream strOut;
         strOut << std::fixed << std::setprecision(2) << "out_cpu_" << 
-          pImpl->gridSize << '_' << k << ".bmp";
+          /* pImpl->gridSize << */ '_' << k << ".bmp";
         std::string fileName = strOut.str();
 
 
@@ -116,10 +135,16 @@ int main(int argc, const char **argv)
 
         std::cout << loss << ' ' << loss_d << std::endl;
         free(input);
+
+        k++;
+
+        if (k == IMAGE_LOOP)
+          break;
       }
 
-      pImpl->kernel2D_TVGrad();
-      pImpl->optimizerStep(j);
+      // pImpl->kernel2D_TVGrad();
+      pImpl->optimizerStep(step++);
+      std::cout << "-----------------------------------------------------------------" << std::endl;
     }
 
     if (i < UPSAMPLE_LOOP - 1)
@@ -127,7 +152,7 @@ int main(int argc, const char **argv)
       std::cout << "Upsample start" << std::endl;
       pImpl->UpsampleGrid();
       pImpl->InitGrad();
-      pImpl->optimizerInit();
+      pImpl->optimizerUpsample();
       pImpl->UpsampleOctree();
       std::cout << "Upsample end" << std::endl;
     }
@@ -136,9 +161,9 @@ int main(int argc, const char **argv)
   std::cout << pImpl->boxes.size() << ' ' << 
     ((pImpl->gridSize - 1) * (pImpl->gridSize - 1) * (pImpl->gridSize - 1)) << std::endl;
 
-  // std::ofstream fout("model.dat", std::ios::out | std::ios::binary);
-  // fout.write((char*)&pImpl->grid[0], pImpl->grid.size() * sizeof(Cell));
-  // fout.close();
+  std::ofstream fout("model.dat", std::ios::out | std::ios::binary);
+  fout.write((char*)&pImpl->grid[0], pImpl->grid.size() * sizeof(Cell));
+  fout.close();
   std::cout << "Cleanup start" << std::endl;
   pImpl = nullptr;
   std::cout << "Cleanup end" << std::endl;
